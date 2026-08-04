@@ -38,8 +38,11 @@ class QBittorrentClient(BaseTorrentClient):
                 timeout=self.timeout,
             )
         except requests.RequestException as exc:
+            # Полный стек urllib3 идёт в лог, пользователю — что делать.
+            logger.debug("Подключение к qBittorrent не удалось: {}", exc)
             raise TorrentClientError(
-                f"qBittorrent недоступен по адресу {self.settings.base_url}: {exc}"
+                f"qBittorrent недоступен по адресу {self.settings.base_url}. "
+                "Проверьте, что клиент запущен и в его настройках включён веб-интерфейс."
             ) from exc
 
         if response.status_code == 403:
@@ -67,7 +70,10 @@ class QBittorrentClient(BaseTorrentClient):
                 self.login()
                 response = self.session.request(method, url, **kwargs)
         except requests.RequestException as exc:
-            raise TorrentClientError(f"Нет связи с qBittorrent: {exc}") from exc
+            logger.debug("Запрос к qBittorrent не прошёл: {}", exc)
+            raise TorrentClientError(
+                f"Потеряна связь с qBittorrent ({self.settings.base_url})"
+            ) from exc
 
         if response.status_code >= 400:
             raise TorrentClientError(f"qBittorrent вернул HTTP {response.status_code}")

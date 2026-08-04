@@ -36,6 +36,7 @@ from .feed_view import FeedView
 from .icons import app_icon
 from .library_view import LibraryView
 from .tray import Tray
+from .widgets import ElidedLabel
 from .workers import Worker
 
 
@@ -110,7 +111,8 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         status = QStatusBar()
-        self.status_label = QLabel("Готово")
+        status.setSizeGripEnabled(False)
+        self.status_label = ElidedLabel("Готово")
         self.status_label.setObjectName("statusLabel")
         status.addWidget(self.status_label, 1)
         self.progress = QProgressBar()

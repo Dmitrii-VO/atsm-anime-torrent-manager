@@ -117,8 +117,17 @@ class ReleaseTableModel(QAbstractTableModel):
         return 0 if parent.isValid() else len(self.HEADERS)
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):  # noqa: N802
-        if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
+        if orientation != Qt.Orientation.Horizontal:
+            return None
+        if role == Qt.ItemDataRole.DisplayRole:
             return self.HEADERS[section]
+        if role == Qt.ItemDataRole.TextAlignmentRole:
+            # Заголовок широкой колонки, выровненный по центру, выглядит оторванным
+            # от своих же значений слева.
+            alignment = (
+                Qt.AlignmentFlag.AlignRight if section in (1, 3) else Qt.AlignmentFlag.AlignLeft
+            )
+            return int(alignment | Qt.AlignmentFlag.AlignVCenter)
         return None
 
     def data(self, index: QModelIndex, role=Qt.ItemDataRole.DisplayRole):

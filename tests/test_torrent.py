@@ -61,9 +61,22 @@ class TestQBittorrentClient:
 
     @responses.activate
     def test_offline_client(self, client: QBittorrentClient) -> None:
-        responses.post(f"{API}/auth/login", body=requests.ConnectionError("отказано"))
-        with pytest.raises(TorrentClientError, match="недоступен"):
+        """Пользователю нужен понятный совет, а не дамп urllib3."""
+        responses.post(
+            f"{API}/auth/login",
+            body=requests.ConnectionError(
+                "HTTPConnectionPool(host='127.0.0.1', port=8080): Max retries exceeded "
+                "with url: /api/v2/auth/login (Caused by NewConnectionError(...))"
+            ),
+        )
+        with pytest.raises(TorrentClientError) as exc:
             client.test_connection()
+
+        message = str(exc.value)
+        assert "недоступен" in message and "веб-интерфейс" in message
+        assert "HTTPConnectionPool" not in message
+        assert "urllib3" not in message
+        assert len(message) < 200
 
     @responses.activate
     def test_add_torrent_file_with_options(self, client: QBittorrentClient) -> None:

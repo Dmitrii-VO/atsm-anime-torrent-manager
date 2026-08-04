@@ -217,6 +217,64 @@ class TestModels:
         assert model.data(model.index(0, 2)) == "Проверка"
 
 
+LONG_ERROR = (
+    "Ошибка: qBittorrent недоступен по адресу http://127.0.0.1:8080: "
+    "HTTPConnectionPool(host='127.0.0.1', port=8080): Max retries exceeded with url: "
+    "/api/v2/auth/login (Caused by NewConnectionError('<urllib3.connection.HTTPConnection "
+    "object at 0x0000028DF75AA>: Failed to establish a new connection'))"
+)
+
+
+class TestStatusBar:
+    """Длинное сообщение в строке состояния однажды растянуло окно до 3578 px,
+    из-за чего колонки таблицы уехали за край экрана."""
+
+    def test_long_message_does_not_widen_window(self, qtbot, seeded_ctx) -> None:
+        from atsm.gui.main_window import MainWindow
+
+        window = MainWindow(seeded_ctx)
+        qtbot.addWidget(window)
+        window.resize(1200, 700)
+        before = window.minimumSizeHint().width()
+
+        window.status_label.setText(LONG_ERROR)
+        after = window.minimumSizeHint().width()
+
+        assert after == before
+        window.scheduler.shutdown()
+
+    def test_full_text_kept_in_tooltip(self, qtbot) -> None:
+        from atsm.gui.widgets import ElidedLabel
+
+        label = ElidedLabel()
+        qtbot.addWidget(label)
+        label.resize(200, 20)
+        label.setText(LONG_ERROR)
+
+        assert label.toolTip() == LONG_ERROR
+        assert label.full_text() == LONG_ERROR
+        assert len(label.text()) < len(LONG_ERROR)
+        assert label.text().endswith("…")
+
+    def test_release_table_fits_viewport(self, qtbot, seeded_ctx) -> None:
+        """Все колонки раздач должны помещаться в окно без горизонтальной прокрутки."""
+        from atsm.gui.main_window import MainWindow
+
+        window = MainWindow(seeded_ctx)
+        qtbot.addWidget(window)
+        window.resize(1200, 700)
+        window.show()
+        window.tabs.setCurrentIndex(1)
+        window.library.anime_list.setCurrentIndex(window.library.anime_model.index(0, 0))
+        window.status_label.setText(LONG_ERROR)
+        qtbot.wait(50)
+
+        table = window.library.releases
+        total = sum(table.columnWidth(c) for c in range(table.model().columnCount()))
+        assert total <= table.viewport().width() + 2
+        window.scheduler.shutdown()
+
+
 class TestTrayAndIcons:
     def test_badge_icon_renders(self) -> None:
         assert not app_icon().isNull()
