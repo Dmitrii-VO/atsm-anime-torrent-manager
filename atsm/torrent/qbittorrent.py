@@ -46,12 +46,21 @@ class QBittorrentClient(BaseTorrentClient):
             ) from exc
 
         if response.status_code == 403:
-            raise TorrentClientError("Вход заблокирован (слишком много попыток)")
-        if response.text.strip() != "Ok.":
-            raise TorrentClientError("Неверный логин или пароль qBittorrent")
+            raise TorrentClientError(
+                "Вход в qBittorrent заблокирован: слишком много неудачных попыток. "
+                "Подождите или перезапустите клиент."
+            )
 
+        body = response.text.strip()
+        if body.lower().startswith("fail"):
+            raise TorrentClientError("Неверный логин или пароль qBittorrent")
+        if response.status_code >= 400:
+            raise TorrentClientError(f"qBittorrent вернул HTTP {response.status_code} при входе")
+
+        # Успехом считается не только "Ok.": при включённом в qBittorrent обходе
+        # авторизации для localhost версия 5.x отвечает 204 с пустым телом.
         self._logged_in = True
-        logger.debug("Вход в qBittorrent выполнен")
+        logger.debug("Вход в qBittorrent выполнен (ответ: {!r})", body or response.status_code)
 
     def _request(self, method: str, path: str, **kwargs) -> requests.Response:
         if not self._logged_in:

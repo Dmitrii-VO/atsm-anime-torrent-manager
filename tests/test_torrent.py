@@ -60,6 +60,21 @@ class TestQBittorrentClient:
             client.test_connection()
 
     @responses.activate
+    def test_localhost_auth_bypass(self, client: QBittorrentClient) -> None:
+        """qBittorrent 5.x при обходе авторизации для localhost отвечает 204
+        с пустым телом вместо «Ok.» — это успех, а не неверный пароль."""
+        responses.post(f"{API}/auth/login", status=204, body="")
+        responses.get(f"{API}/app/version", body="v5.2.3")
+
+        assert client.test_connection() == "v5.2.3"
+
+    @responses.activate
+    def test_login_ban(self, client: QBittorrentClient) -> None:
+        responses.post(f"{API}/auth/login", status=403, body="banned")
+        with pytest.raises(TorrentClientError, match="заблокирован"):
+            client.test_connection()
+
+    @responses.activate
     def test_offline_client(self, client: QBittorrentClient) -> None:
         """Пользователю нужен понятный совет, а не дамп urllib3."""
         responses.post(
