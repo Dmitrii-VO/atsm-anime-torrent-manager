@@ -1,0 +1,12 @@
+PySide6>=6.7
+requests>=2.32
+beautifulsoup4>=4.12
+lxml>=5.0
+loguru>=0.7
+APScheduler>=3.10
+pydantic>=2.7
+
+# dev
+pytest>=8.0
+pytest-qt>=4.4
+responses>=0.25
