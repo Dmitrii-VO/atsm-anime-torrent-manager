@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from loguru import logger
-from PySide6.QtCore import QThreadPool, QTimer, Qt, Signal
+from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QDesktopServices, QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import (
@@ -47,7 +47,7 @@ from .library_view import LibraryView
 from .palette import palette_for, stylesheet
 from .tray import Tray
 from .widgets import ElidedLabel
-from .workers import Worker
+from .workers import WorkerRunner
 
 
 class MainWindow(QMainWindow):
@@ -56,7 +56,7 @@ class MainWindow(QMainWindow):
     def __init__(self, ctx: AppContext) -> None:
         super().__init__()
         self.ctx = ctx
-        self.pool = QThreadPool.globalInstance()
+        self.workers = WorkerRunner()
         self._force_quit = False
         self._busy = False
 
@@ -225,10 +225,7 @@ class MainWindow(QMainWindow):
 
     def _run(self, fn, on_done, *args, busy_message: str = "", **kwargs) -> None:
         self._set_busy(True, busy_message)
-        worker = Worker(fn, *args, **kwargs)
-        worker.signals.finished.connect(on_done)
-        worker.signals.failed.connect(self._on_failure)
-        self.pool.start(worker)
+        self.workers.start(fn, *args, on_done=on_done, on_failed=self._on_failure, **kwargs)
 
     def _on_failure(self, exc: Exception) -> None:
         message = str(exc)
@@ -338,12 +335,11 @@ class MainWindow(QMainWindow):
 
     def _refresh_download_states(self) -> None:
         """Спрашивает у клиента, что уже скачано (ТЗ §13). Тихо и в фоне."""
-        worker = Worker(self.torrents.refresh_download_states)
-        worker.signals.finished.connect(self._on_download_states)
-        worker.signals.failed.connect(
-            lambda exc: logger.debug("Статусы раздач не обновлены: {}", exc)
+        self.workers.start(
+            self.torrents.refresh_download_states,
+            on_done=self._on_download_states,
+            on_failed=lambda exc: logger.debug("Статусы раздач не обновлены: {}", exc),
         )
-        self.pool.start(worker)
 
     def _on_download_states(self, updated: int) -> None:
         if updated:

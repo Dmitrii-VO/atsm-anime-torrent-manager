@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QThreadPool, Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -31,7 +31,7 @@ from ..logging_setup import log_buffer
 from ..services.autostart import is_autostart_enabled
 from .palette import THEME_LABELS
 from .models import HistoryTableModel
-from .workers import Worker
+from .workers import WorkerRunner
 
 
 class AddSubscriptionDialog(QDialog):
@@ -40,7 +40,7 @@ class AddSubscriptionDialog(QDialog):
     def __init__(self, subscriptions, parent=None) -> None:
         super().__init__(parent)
         self.subscriptions = subscriptions
-        self.pool = QThreadPool.globalInstance()
+        self.workers = WorkerRunner()
         self.result_info = None
 
         self.setWindowTitle("Добавить подписку")
@@ -100,10 +100,12 @@ class AddSubscriptionDialog(QDialog):
             return
         self._busy(True, "Загружаем страницу…")
 
-        worker = Worker(self.subscriptions.preview, self.url())
-        worker.signals.finished.connect(self._preview_done)
-        worker.signals.failed.connect(lambda msg: self._busy(False, f"Ошибка: {msg}"))
-        self.pool.start(worker)
+        self.workers.start(
+            self.subscriptions.preview,
+            self.url(),
+            on_done=self._preview_done,
+            on_failed=lambda exc: self._busy(False, f"Ошибка: {exc}"),
+        )
 
     def _preview_done(self, info) -> None:
         self._busy(False)
@@ -117,10 +119,13 @@ class AddSubscriptionDialog(QDialog):
             return
         self._busy(True, "Добавляем подписку…")
 
-        worker = Worker(self.subscriptions.add, self.url(), auto_download=self.auto_download())
-        worker.signals.finished.connect(self._added)
-        worker.signals.failed.connect(lambda msg: self._busy(False, f"Ошибка: {msg}"))
-        self.pool.start(worker)
+        self.workers.start(
+            self.subscriptions.add,
+            self.url(),
+            auto_download=self.auto_download(),
+            on_done=self._added,
+            on_failed=lambda exc: self._busy(False, f"Ошибка: {exc}"),
+        )
 
     def _added(self, anime) -> None:
         self.result_info = anime
@@ -134,7 +139,7 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.settings = settings
         self.torrent_client_factory = torrent_client_factory
-        self.pool = QThreadPool.globalInstance()
+        self.workers = WorkerRunner()
 
         self.setWindowTitle("Настройки")
         self.setMinimumWidth(520)
@@ -279,12 +284,11 @@ class SettingsDialog(QDialog):
         self._apply_to_settings()
 
         client = self.torrent_client_factory()
-        worker = Worker(client.test_connection)
-        worker.signals.finished.connect(
-            lambda version: self._test_done(f"qBittorrent {version} — соединение есть")
+        self.workers.start(
+            client.test_connection,
+            on_done=lambda version: self._test_done(f"qBittorrent {version} — соединение есть"),
+            on_failed=lambda exc: self._test_done(f"Ошибка: {exc}"),
         )
-        worker.signals.failed.connect(lambda msg: self._test_done(f"Ошибка: {msg}"))
-        self.pool.start(worker)
 
     def _test_done(self, message: str) -> None:
         self.test_button.setEnabled(True)

@@ -468,6 +468,63 @@ class TestTheme:
         painter.end()
 
 
+class TestWorkers:
+    """Потеря сигналов из фоновых потоков выглядела как вечная «загрузка»:
+    задача отрабатывала, но интерфейс об этом не узнавал и оставался занят."""
+
+    def test_all_results_are_delivered(self, qtbot) -> None:
+        from PySide6.QtCore import QThreadPool
+
+        from atsm.gui.workers import WorkerRunner
+
+        runner = WorkerRunner()
+        received: list[int] = []
+        total = 200
+
+        for i in range(total):
+            runner.start(lambda value=i: value, on_done=received.append)
+
+        qtbot.waitUntil(lambda: len(received) == total, timeout=10000)
+        QThreadPool.globalInstance().waitForDone(3000)
+        assert sorted(received) == list(range(total))
+        # Ссылки освобождаются после доставки, иначе воркеры копились бы.
+        assert runner.active_count == 0
+
+    def test_failures_are_delivered_too(self, qtbot) -> None:
+        from atsm.gui.workers import WorkerRunner
+
+        runner = WorkerRunner()
+        errors: list[Exception] = []
+
+        def boom():
+            raise ValueError("сбой в фоне")
+
+        for _ in range(50):
+            runner.start(boom, on_failed=errors.append)
+
+        qtbot.waitUntil(lambda: len(errors) == 50, timeout=10000)
+        assert all(isinstance(e, ValueError) for e in errors)
+        assert runner.active_count == 0
+
+    def test_busy_state_is_released_after_failure(self, qtbot, seeded_ctx) -> None:
+        """Ошибка фоновой задачи обязана снимать блокировку интерфейса."""
+        from atsm.gui.main_window import MainWindow
+
+        window = MainWindow(seeded_ctx)
+        qtbot.addWidget(window)
+
+        def boom():
+            raise RuntimeError("справочник недоступен")
+
+        window._run(boom, lambda _: None, busy_message="Ищем…")
+        assert window._busy is True
+
+        qtbot.waitUntil(lambda: window._busy is False, timeout=5000)
+        assert window.check_all_button.isEnabled()
+        assert "справочник недоступен" in window.status_label.full_text()
+        window.scheduler.shutdown()
+
+
 class TestTrayAndIcons:
     def test_badge_icon_renders(self) -> None:
         assert not app_icon().isNull()
