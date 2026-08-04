@@ -62,6 +62,7 @@ class AnimeMetadata:
     genres: list[str] = field(default_factory=list)
     description: str | None = None
     site_url: str | None = None
+    franchise: str | None = None
 
     def merge(self, other: "AnimeMetadata") -> "AnimeMetadata":
         """Дополняет пустые поля данными другого провайдера, не затирая свои."""

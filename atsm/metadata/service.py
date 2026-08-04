@@ -80,6 +80,34 @@ class MetadataService:
         self.repos.metadata.save(anime_id, metadata, anilist_id=anilist_id)
         return metadata
 
+    def backfill_franchise(self) -> int:
+        """Догружает франшизу тем подпискам, где её ещё нет.
+
+        Идентификатор тайтла уже сохранён, поэтому поиск не нужен — один
+        запрос на подписку. AniList здесь не трогаем: франшиза берётся
+        только из Shikimori.
+        """
+        anime_ids = self.repos.metadata.missing_franchise()
+        updated = 0
+
+        for anime_id in anime_ids:
+            stored = self.repos.metadata.get(anime_id)
+            external_id = (stored or {}).get("shikimori_id")
+            if not external_id:
+                continue
+            try:
+                metadata = self.shikimori.fetch(external_id)
+            except MetadataError as exc:
+                logger.debug("Франшиза для подписки {} не получена: {}", anime_id, exc)
+                continue
+
+            self.repos.metadata.save(anime_id, metadata, anilist_id=(stored or {}).get("anilist_id"))
+            updated += 1
+
+        if updated:
+            logger.info("Догружена франшиза для подписок: {}", updated)
+        return updated
+
     def _add_anilist(self, metadata: AnimeMetadata) -> str | None:
         """AniList дополняет точным временем выхода серии. Его отказ не критичен."""
         if not metadata.title_romaji:

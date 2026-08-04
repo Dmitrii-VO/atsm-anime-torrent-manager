@@ -17,7 +17,7 @@ from typing import Iterator
 
 from loguru import logger
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def _load_initial_schema() -> str:
@@ -52,12 +52,17 @@ CREATE TABLE IF NOT EXISTS anime_metadata (
 );
 """
 
+# Франшиза из Shikimori: связывает «Блич» и «Блич: Тысячелетняя кровавая
+# война» в одну группу. Ключ надёжнее сравнения названий.
+_MIGRATION_004 = "ALTER TABLE anime_metadata ADD COLUMN franchise TEXT;"
+
 # Миграции применяются по порядку; версия N приводит схему к состоянию N.
 # Новая версия — новая запись здесь, ничего существующего не меняем.
 MIGRATIONS: dict[int, callable] = {
     1: _load_initial_schema,
     2: lambda: _MIGRATION_002,
     3: lambda: _MIGRATION_003,
+    4: lambda: _MIGRATION_004,
 }
 
 

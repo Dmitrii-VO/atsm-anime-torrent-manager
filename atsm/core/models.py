@@ -60,7 +60,11 @@ class Anime:
     last_check_ok: bool | None = None
     last_error: str | None = None
     created_at: datetime | None = None
-    # Считаются запросом со стороны репозитория, в таблице не хранятся.
+    # Приезжают из anime_metadata и в самой таблице anime не хранятся.
+    shikimori_id: str | None = None
+    franchise: str | None = None
+    title_romaji: str | None = None
+    # Считаются запросом со стороны репозитория.
     new_count: int = 0
     last_episode: int | None = None
 
@@ -88,6 +92,7 @@ class Release:
     is_seen: bool = False
     first_seen_at: datetime | None = None
     anime_title: str | None = None  # для ленты, из JOIN
+    source: str | None = None       # для объединённых подписок, из JOIN
 
     @property
     def episode_label(self) -> str:

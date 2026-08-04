@@ -86,6 +86,20 @@ class WorkerRunner:
     def _release(self, worker: Worker) -> None:
         self._active.discard(worker)
 
+    def clear(self) -> None:
+        """Отключает обработчики незавершённых задач.
+
+        Вызывается при закрытии приложения: результат, доставленный после
+        уничтожения окна, иначе падает с «Signal source has been deleted».
+        """
+        for worker in tuple(self._active):
+            for signal in (worker.signals.finished, worker.signals.failed):
+                try:
+                    signal.disconnect()
+                except RuntimeError:
+                    pass
+        self._active.clear()
+
     @property
     def active_count(self) -> int:
         return len(self._active)

@@ -102,6 +102,7 @@ class ShikimoriProvider(MetadataProvider):
             genres=[g.get("russian") or g.get("name") for g in (data.get("genres") or [])],
             description=data.get("description") or None,
             site_url=f"{BASE}{data.get('url')}" if data.get("url") else None,
+            franchise=data.get("franchise") or None,
         )
 
 

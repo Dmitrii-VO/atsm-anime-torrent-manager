@@ -49,12 +49,15 @@ class AnimeRepository:
             last_check_ok=None if row["last_check_ok"] is None else bool(row["last_check_ok"]),
             last_error=row["last_error"],
             created_at=_parse_dt(row["created_at"]),
+            shikimori_id=row["shikimori_id"] if "shikimori_id" in keys else None,
+            franchise=row["franchise"] if "franchise" in keys else None,
+            title_romaji=row["title_romaji"] if "title_romaji" in keys else None,
             new_count=row["new_count"] if "new_count" in keys else 0,
             last_episode=row["last_episode"] if "last_episode" in keys else None,
         )
 
     _SELECT = """
-        SELECT a.*,
+        SELECT a.*, m.shikimori_id, m.franchise, m.title_romaji,
                (SELECT COUNT(*) FROM release r
                  WHERE r.anime_id = a.id AND r.is_seen = 0 AND r.state = 'new') AS new_count,
                -- Для пачек «1-5» последней вышедшей считается конец диапазона,
@@ -62,6 +65,7 @@ class AnimeRepository:
                (SELECT MAX(COALESCE(r.episode_end, r.episode)) FROM release r
                  WHERE r.anime_id = a.id) AS last_episode
           FROM anime a
+          LEFT JOIN anime_metadata m ON m.anime_id = a.id
     """
 
     def list(self) -> list[Anime]:
@@ -151,6 +155,7 @@ class ReleaseRepository:
             is_seen=bool(row["is_seen"]),
             first_seen_at=_parse_dt(row["first_seen_at"]),
             anime_title=row["anime_title"] if "anime_title" in keys else None,
+            source=row["source"] if "source" in keys else None,
         )
 
     def known_external_ids(self, anime_id: int) -> set[str]:
@@ -209,7 +214,7 @@ class ReleaseRepository:
             )
 
     _SELECT = """
-        SELECT r.*, a.title AS anime_title
+        SELECT r.*, a.title AS anime_title, a.source AS source
           FROM release r JOIN anime a ON a.id = r.anime_id
     """
 
@@ -219,6 +224,20 @@ class ReleaseRepository:
             + " WHERE r.anime_id = ?"
             + " ORDER BY r.episode IS NULL, r.episode DESC, r.first_seen_at DESC",
             (anime_id,),
+        )
+        return [self._to_model(row) for row in rows]
+
+    def list_for_anime_ids(self, anime_ids: list[int]) -> list[Release]:
+        """Раздачи нескольких подписок сразу — для объединённых дубликатов."""
+        if not anime_ids:
+            return []
+        placeholders = ",".join("?" * len(anime_ids))
+        rows = self.db.query(
+            self._SELECT
+            + f" WHERE r.anime_id IN ({placeholders})"
+            + " ORDER BY r.episode IS NULL, COALESCE(r.episode_end, r.episode) DESC,"
+            + " r.first_seen_at DESC",
+            tuple(anime_ids),
         )
         return [self._to_model(row) for row in rows]
 
@@ -358,7 +377,7 @@ class MetadataRepository:
         "shikimori_id", "anilist_id", "title_ru", "title_romaji", "title_native",
         "kind", "status", "score", "episodes_total", "episodes_aired",
         "next_episode_number", "next_episode_at", "poster_url", "genres",
-        "description", "site_url",
+        "description", "site_url", "franchise",
     )
 
     def __init__(self, db: Database) -> None:
@@ -394,6 +413,8 @@ class MetadataRepository:
             "genres": ",".join(metadata.genres or []),
             "description": metadata.description,
             "site_url": metadata.site_url,
+            # Пустая строка означает «проверено, франшизы нет»; NULL — «ещё не спрашивали».
+            "franchise": metadata.franchise or "",
         }
         columns = ", ".join(self.FIELDS)
         placeholders = ", ".join("?" * len(self.FIELDS))
@@ -410,6 +431,18 @@ class MetadataRepository:
     def delete(self, anime_id: int) -> None:
         with self.db.transaction() as conn:
             conn.execute("DELETE FROM anime_metadata WHERE anime_id = ?", (anime_id,))
+
+    def missing_franchise(self) -> list[int]:
+        """Подписки, у которых справка загружена до появления поля franchise.
+
+        Без дозагрузки группировка по франшизам не заработает на уже
+        существующих базах.
+        """
+        rows = self.db.query(
+            "SELECT anime_id FROM anime_metadata"
+            " WHERE shikimori_id IS NOT NULL AND franchise IS NULL"
+        )
+        return [row["anime_id"] for row in rows]
 
 
 class Repositories:

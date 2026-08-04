@@ -8,10 +8,15 @@ from __future__ import annotations
 
 from PySide6.QtCore import QAbstractListModel, QAbstractTableModel, QModelIndex, Qt
 
+from ..core.grouping import LibraryEntry, LibraryGroup
 from ..core.models import Anime, HistoryEntry, Release, ReleaseState  # noqa: F401
 
 RELEASE_ROLE = Qt.ItemDataRole.UserRole + 1
 ANIME_ROLE = Qt.ItemDataRole.UserRole + 2
+GROUP_ROLE = Qt.ItemDataRole.UserRole + 3
+ENTRY_ROLE = Qt.ItemDataRole.UserRole + 4
+ROW_KIND_ROLE = Qt.ItemDataRole.UserRole + 5
+COLLAPSED_ROLE = Qt.ItemDataRole.UserRole + 6
 
 STATE_LABELS = {
     ReleaseState.NEW: "Новая",
@@ -64,49 +69,118 @@ class FeedModel(QAbstractListModel):
         return list(self._releases)
 
 
-class AnimeListModel(QAbstractListModel):
-    """Список подписок с числом новых серий и состоянием проверки (ТЗ §6)."""
+class LibraryModel(QAbstractListModel):
+    """Список подписок деревом: франшизы и вложенные записи (ТЗ §6).
+
+    Плоская модель со строками двух видов вместо QTreeView: карточки и так
+    рисуются делегатом вручную, а собственные строки-заголовки дешевле дерева.
+    """
 
     def __init__(self) -> None:
         super().__init__()
-        self._items: list[Anime] = []
+        self._rows: list[tuple[str, object]] = []
+        self._groups: list[LibraryGroup] = []
+        self._collapsed: set[str] = set()
+
+    # --- построение строк ------------------------------------------------
+
+    def set_groups(self, groups: list[LibraryGroup]) -> None:
+        self.beginResetModel()
+        self._groups = groups
+        self._rebuild()
+        self.endResetModel()
+
+    def _rebuild(self) -> None:
+        rows: list[tuple[str, object]] = []
+        for group in self._groups:
+            if not group.is_franchise:
+                rows.extend(("entry", entry) for entry in group.entries)
+                continue
+            rows.append(("group", group))
+            if group.key not in self._collapsed:
+                rows.extend(("child", entry) for entry in group.entries)
+        self._rows = rows
+
+    def toggle_group(self, key: str) -> None:
+        self.beginResetModel()
+        self._collapsed.symmetric_difference_update({key})
+        self._rebuild()
+        self.endResetModel()
+
+    def is_collapsed(self, key: str) -> bool:
+        return key in self._collapsed
+
+    # --- контракт модели -------------------------------------------------
 
     def rowCount(self, parent=QModelIndex()) -> int:  # noqa: N802
-        return 0 if parent.isValid() else len(self._items)
+        return 0 if parent.isValid() else len(self._rows)
+
+    def flags(self, index: QModelIndex):
+        base = super().flags(index)
+        # Заголовок франшизы не выбирается: он только сворачивается.
+        if index.isValid() and self._rows[index.row()][0] == "group":
+            return base & ~Qt.ItemFlag.ItemIsSelectable
+        return base
 
     def data(self, index: QModelIndex, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid():
             return None
-        anime = self._items[index.row()]
-        if role == ANIME_ROLE:
-            return anime
+        kind, payload = self._rows[index.row()]
+
+        if role == ROW_KIND_ROLE:
+            return kind
+        if role == GROUP_ROLE and kind == "group":
+            return payload
+        if role == COLLAPSED_ROLE and kind == "group":
+            return payload.key in self._collapsed
+        if role == ENTRY_ROLE and kind in ("entry", "child"):
+            return payload
+        if role == ANIME_ROLE and kind in ("entry", "child"):
+            return payload.primary
         if role == Qt.ItemDataRole.DisplayRole:
-            return anime.title
-        if role == Qt.ItemDataRole.ToolTipRole:
-            return self._tooltip(anime)
+            return payload.title
+        if role == Qt.ItemDataRole.ToolTipRole and kind != "group":
+            return self._tooltip(payload)
         return None
 
     @staticmethod
-    def _tooltip(anime: Anime) -> str:
-        checked = (
-            anime.last_check_at.strftime("%d.%m.%Y %H:%M") if anime.last_check_at else "никогда"
-        )
-        lines = [anime.title, f"Источник: {anime.source}", f"Проверено: {checked}"]
-        if anime.last_error:
-            lines.append(f"Ошибка: {anime.last_error}")
+    def _tooltip(entry: LibraryEntry) -> str:
+        lines = [entry.title]
+        for anime in entry.animes:
+            checked = (
+                anime.last_check_at.strftime("%d.%m.%Y %H:%M")
+                if anime.last_check_at
+                else "не проверялось"
+            )
+            lines.append(f"{anime.source}: проверено {checked}")
+            if anime.last_error:
+                lines.append(f"   ошибка: {anime.last_error}")
         return "\n".join(lines)
 
-    def set_items(self, items: list[Anime]) -> None:
-        self.beginResetModel()
-        self._items = items
-        self.endResetModel()
+    # --- доступ ----------------------------------------------------------
+
+    def entry_at(self, row: int) -> LibraryEntry | None:
+        if not 0 <= row < len(self._rows):
+            return None
+        kind, payload = self._rows[row]
+        return payload if kind in ("entry", "child") else None
+
+    def group_at(self, row: int) -> LibraryGroup | None:
+        if not 0 <= row < len(self._rows):
+            return None
+        kind, payload = self._rows[row]
+        return payload if kind == "group" else None
+
+    def is_child(self, row: int) -> bool:
+        return 0 <= row < len(self._rows) and self._rows[row][0] == "child"
 
     def anime_at(self, row: int) -> Anime | None:
-        return self._items[row] if 0 <= row < len(self._items) else None
+        entry = self.entry_at(row)
+        return entry.primary if entry else None
 
     def row_of(self, anime_id: int) -> int:
-        for row, anime in enumerate(self._items):
-            if anime.id == anime_id:
+        for row, (kind, payload) in enumerate(self._rows):
+            if kind in ("entry", "child") and anime_id in payload.ids:
                 return row
         return -1
 
@@ -114,7 +188,7 @@ class AnimeListModel(QAbstractListModel):
 class ReleaseTableModel(QAbstractTableModel):
     """Таблица раздач выбранного аниме (ТЗ §7)."""
 
-    HEADERS = ("Серия", "Размер", "Дата", "Сиды", "Статус")
+    HEADERS = ("Серия", "Источник", "Качество", "Размер", "Дата", "Сиды", "Статус")
 
     def __init__(self) -> None:
         super().__init__()
@@ -135,7 +209,7 @@ class ReleaseTableModel(QAbstractTableModel):
             # Заголовок широкой колонки, выровненный по центру, выглядит оторванным
             # от своих же значений слева.
             alignment = (
-                Qt.AlignmentFlag.AlignRight if section in (1, 3) else Qt.AlignmentFlag.AlignLeft
+                Qt.AlignmentFlag.AlignRight if section in (3, 5) else Qt.AlignmentFlag.AlignLeft
             )
             return int(alignment | Qt.AlignmentFlag.AlignVCenter)
         return None
@@ -147,7 +221,7 @@ class ReleaseTableModel(QAbstractTableModel):
 
         if role == RELEASE_ROLE:
             return release
-        if role == Qt.ItemDataRole.TextAlignmentRole and index.column() in (1, 3):
+        if role == Qt.ItemDataRole.TextAlignmentRole and index.column() in (3, 5):
             return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         if role != Qt.ItemDataRole.DisplayRole:
             return None
@@ -156,12 +230,16 @@ class ReleaseTableModel(QAbstractTableModel):
             case 0:
                 return release.episode_label
             case 1:
-                return release.size_label
+                return release.source or "—"
             case 2:
-                return release.published_at.strftime("%d.%m.%Y") if release.published_at else "—"
+                return release.quality or "—"
             case 3:
-                return "—" if release.seeders is None else str(release.seeders)
+                return release.size_label
             case 4:
+                return release.published_at.strftime("%d.%m.%Y") if release.published_at else "—"
+            case 5:
+                return "—" if release.seeders is None else str(release.seeders)
+            case 6:
                 return _state_label(release)
         return None
 

@@ -76,6 +76,7 @@ class MainWindow(QMainWindow):
         self._connect()
 
         self.refresh_all()
+        self._backfill_metadata()
         self._start_scheduler()
 
     # --- построение ------------------------------------------------------
@@ -185,6 +186,20 @@ class MainWindow(QMainWindow):
     def _make_client(self) -> QBittorrentClient:
         return QBittorrentClient(self.ctx.settings.qbittorrent)
 
+    def _backfill_metadata(self) -> None:
+        """Разовая дозагрузка недостающих полей справки — тихо, в фоне."""
+        if not self.repos.metadata.missing_franchise():
+            return
+        self.workers.start(
+            self.metadata.backfill_franchise,
+            on_done=self._on_backfill_done,
+            on_failed=lambda exc: logger.debug("Дозагрузка справки не удалась: {}", exc),
+        )
+
+    def _on_backfill_done(self, updated: int) -> None:
+        if updated:
+            self.refresh_all()
+
     def _start_scheduler(self) -> None:
         # Колбэк приходит из потока планировщика — только сигнал, никакого UI.
         self.scheduler = CheckScheduler(self.scheduled_check.emit)
@@ -207,11 +222,12 @@ class MainWindow(QMainWindow):
         self.tray.set_new_count(len(releases))
 
     def _refresh_releases(self) -> None:
-        anime = self.library.current_anime()
+        entry = self.library.current_entry()
+        # У объединённой записи раздачи берутся сразу из всех её источников.
         self.library.set_releases(
-            self.repos.releases.list_for_anime(anime.id) if anime else []
+            self.repos.releases.list_for_anime_ids(entry.ids) if entry else []
         )
-        self.library.set_metadata(self.repos.metadata.get(anime.id) if anime else None)
+        self.library.set_metadata(self.repos.metadata.get(entry.id) if entry else None)
 
     # --- состояние занятости ---------------------------------------------
 
@@ -575,6 +591,7 @@ class MainWindow(QMainWindow):
         QApplication.quit()
 
     def _shutdown(self) -> None:
+        self.workers.clear()
         self.scheduler.shutdown()
         self.tray.hide()
         self.ctx.shutdown()

@@ -23,11 +23,23 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..core.grouping import LibraryEntry, LibraryGroup, build_groups
 from ..core.models import Anime, Release, SOURCE_STATE_LABELS, SourceState
-from .models import ANIME_ROLE, RELEASE_ROLE, AnimeListModel, ReleaseTableModel
+from .models import (
+    ANIME_ROLE,
+    ENTRY_ROLE,
+    GROUP_ROLE,
+    RELEASE_ROLE,
+    COLLAPSED_ROLE,
+    ROW_KIND_ROLE,
+    LibraryModel,
+    ReleaseTableModel,
+)
 from .palette import DARK, Palette
 
 ROW_HEIGHT = 62
+GROUP_HEIGHT = 34
+CHILD_INDENT = 14
 
 
 class AnimeDelegate(QStyledItemDelegate):
@@ -41,16 +53,27 @@ class AnimeDelegate(QStyledItemDelegate):
         self.palette = palette
 
     def sizeHint(self, option, index) -> QSize:  # noqa: N802
-        return QSize(option.rect.width(), ROW_HEIGHT)
+        kind = index.data(ROW_KIND_ROLE)
+        return QSize(option.rect.width(), GROUP_HEIGHT if kind == "group" else ROW_HEIGHT)
+
+    def sizeHintForRow(self, kind: str) -> int:
+        return GROUP_HEIGHT if kind == "group" else ROW_HEIGHT
 
     def paint(self, painter: QPainter, option, index: QModelIndex) -> None:
-        anime: Anime = index.data(ANIME_ROLE)
-        if anime is None:
+        kind = index.data(ROW_KIND_ROLE)
+        if kind == "group":
+            self._paint_group(painter, option, index)
+            return
+
+        entry: LibraryEntry = index.data(ENTRY_ROLE)
+        if entry is None:
             return
 
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        rect = option.rect.adjusted(6, 3, -6, -3)
+        # Вложенные в франшизу записи сдвинуты вправо — это и есть дерево.
+        indent = CHILD_INDENT if kind == "child" else 0
+        rect = option.rect.adjusted(6 + indent, 3, -6, -3)
 
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
         hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
@@ -61,7 +84,7 @@ class AnimeDelegate(QStyledItemDelegate):
             painter.drawRoundedRect(rect, 8, 8)
 
         left = rect.left() + 12
-        if anime.is_favorite:
+        if entry.is_favorite:
             painter.setPen(QColor(colors.star))
             painter.drawText(
                 rect.adjusted(0, 8, 0, 0), int(Qt.AlignmentFlag.AlignLeft), "  ★"
@@ -75,7 +98,7 @@ class AnimeDelegate(QStyledItemDelegate):
         painter.drawText(
             rect.adjusted(left - rect.left(), 8, -60, 0),
             int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop),
-            anime.title,
+            entry.title,
         )
 
         painter.setFont(option.font)
@@ -83,12 +106,12 @@ class AnimeDelegate(QStyledItemDelegate):
         painter.drawText(
             rect.adjusted(left - rect.left(), 30, -60, 0),
             int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop),
-            self._subtitle(anime),
+            self._subtitle(entry),
         )
 
-        if anime.new_count:
-            self._paint_badge(painter, option, rect, str(anime.new_count), colors)
-        elif anime.last_check_ok is False:
+        if entry.new_count:
+            self._paint_badge(painter, option, rect, str(entry.new_count), colors)
+        elif entry.has_error:
             painter.setPen(QColor(colors.danger))
             painter.drawText(
                 rect.adjusted(0, 0, -14, 0),
@@ -97,22 +120,72 @@ class AnimeDelegate(QStyledItemDelegate):
             )
         painter.restore()
 
-    @staticmethod
-    def _subtitle(anime: Anime) -> str:
-        checked = (
-            anime.last_check_at.strftime("%d.%m %H:%M") if anime.last_check_at else "не проверялось"
+    def _paint_group(self, painter: QPainter, option, index: QModelIndex) -> None:
+        group: LibraryGroup = index.data(GROUP_ROLE)
+        if group is None:
+            return
+
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        colors = self.palette
+        rect = option.rect.adjusted(6, 2, -6, -2)
+
+        if option.state & QStyle.StateFlag.State_MouseOver:
+            painter.setBrush(QColor(colors.hover))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRoundedRect(rect, 8, 8)
+
+        collapsed = bool(index.data(COLLAPSED_ROLE))
+        painter.setPen(QColor(colors.text_muted))
+        painter.setFont(option.font)
+        painter.drawText(
+            rect.adjusted(10, 0, 0, 0),
+            int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+            "▸" if collapsed else "▾",
         )
-        parts = [anime.source, checked]
-        if anime.last_episode:
-            parts.insert(0, f"до {anime.last_episode} серии")
-        if anime.auto_download:
+
+        title_font = QFont(option.font)
+        title_font.setBold(True)
+        painter.setFont(title_font)
+        painter.setPen(QColor(colors.text))
+        painter.drawText(
+            rect.adjusted(28, 0, -70, 0),
+            int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+            group.title,
+        )
+
+        if group.new_count:
+            self._paint_badge(painter, option, rect, str(group.new_count), colors, height=18)
+        else:
+            painter.setFont(option.font)
+            painter.setPen(QColor(colors.text_muted))
+            painter.drawText(
+                rect.adjusted(0, 0, -14, 0),
+                int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
+                str(len(group.entries)),
+            )
+        painter.restore()
+
+    @staticmethod
+    def _subtitle(entry: LibraryEntry) -> str:
+        checked = (
+            entry.last_check_at.strftime("%d.%m %H:%M")
+            if entry.last_check_at
+            else "не проверялось"
+        )
+        parts = [" + ".join(entry.sources), checked]
+        if entry.last_episode:
+            parts.insert(0, f"до {entry.last_episode} серии")
+        if entry.auto_download:
             parts.append("авто")
         return " · ".join(parts)
 
     @staticmethod
-    def _paint_badge(painter: QPainter, option, rect, text: str, colors: Palette) -> None:
-        badge = rect.adjusted(rect.width() - 46, (ROW_HEIGHT - 22) // 2 - 3, -12, 0)
-        badge.setHeight(22)
+    def _paint_badge(
+        painter: QPainter, option, rect, text: str, colors: Palette, height: int = 22
+    ) -> None:
+        badge = rect.adjusted(rect.width() - 46, (rect.height() - height) // 2, -12, 0)
+        badge.setHeight(height)
         painter.setBrush(QColor(colors.accent))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(badge, 11, 11)
@@ -141,10 +214,11 @@ class LibraryView(QWidget):
 
     def __init__(self, palette: Palette = DARK) -> None:
         super().__init__()
-        self.anime_model = AnimeListModel()
+        self.anime_model = LibraryModel()
         self.release_model = ReleaseTableModel()
         self._all_anime: list[Anime] = []
         self._current: Anime | None = None
+        self._current_entry: LibraryEntry | None = None
         self._palette = palette
         self._build()
 
@@ -202,6 +276,7 @@ class LibraryView(QWidget):
         self.anime_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.anime_list.customContextMenuRequested.connect(self._anime_menu)
         self.anime_list.selectionModel().currentChanged.connect(self._on_anime_selected)
+        self.anime_list.clicked.connect(self._on_row_clicked)
         layout.addWidget(self.anime_list, 1)
 
         # Состояние источников (ТЗ §21): пользователь должен понимать,
@@ -280,6 +355,14 @@ class LibraryView(QWidget):
         self.auto_check.toggled.connect(self._on_auto_toggled)
         actions.addWidget(self.auto_check)
 
+        self.source_box_detail = QComboBox()
+        self.source_box_detail.setToolTip(
+            "Источник, из которого качать автоматически: иначе серия уедет в клиент дважды"
+        )
+        self.source_box_detail.currentIndexChanged.connect(self._on_primary_source_changed)
+        self.source_box_detail.setVisible(False)
+        actions.addWidget(self.source_box_detail)
+
         self.favorite_check = QCheckBox("Избранное")
         self.favorite_check.toggled.connect(self._on_favorite_toggled)
         actions.addWidget(self.favorite_check)
@@ -299,7 +382,7 @@ class LibraryView(QWidget):
 
         header = self.releases.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        for column in range(1, 5):
+        for column in range(1, len(ReleaseTableModel.HEADERS)):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
         layout.addWidget(self.releases, 1)
         return panel
@@ -380,7 +463,7 @@ class LibraryView(QWidget):
                     return anime.auto_download
             return True
 
-        self.anime_model.set_items([a for a in self._all_anime if keep(a)])
+        self.anime_model.set_groups(build_groups([a for a in self._all_anime if keep(a)]))
 
     def select_anime(self, anime_id: int) -> None:
         row = self.anime_model.row_of(anime_id)
@@ -400,12 +483,22 @@ class LibraryView(QWidget):
 
     # --- реакции ---------------------------------------------------------
 
-    def _on_anime_selected(self, current: QModelIndex, _previous: QModelIndex) -> None:
-        anime = self.anime_model.anime_at(current.row()) if current.isValid() else None
-        self._current = anime
-        self._update_details(anime)
+    def _on_row_clicked(self, index: QModelIndex) -> None:
+        group = self.anime_model.group_at(index.row())
+        if group is not None and group.key:
+            self.anime_model.toggle_group(group.key)
 
-    def _update_details(self, anime: Anime | None) -> None:
+    def _on_anime_selected(self, current: QModelIndex, _previous: QModelIndex) -> None:
+        entry = self.anime_model.entry_at(current.row()) if current.isValid() else None
+        self._current_entry = entry
+        self._current = entry.primary if entry else None
+        self._update_details(entry)
+
+    def current_entry(self) -> LibraryEntry | None:
+        return self._current_entry
+
+    def _update_details(self, entry: LibraryEntry | None) -> None:
+        anime = entry.primary if entry else None
         enabled = anime is not None
         for widget in (
             self.check_button,
@@ -417,7 +510,8 @@ class LibraryView(QWidget):
         ):
             widget.setEnabled(enabled)
 
-        if anime is None:
+        self.source_box_detail.setVisible(bool(entry and entry.is_merged))
+        if anime is None or entry is None:
             self.detail_title.setText("Выберите подписку")
             self.detail_meta.setText("")
             self.metadata_label.setText("")
@@ -426,20 +520,25 @@ class LibraryView(QWidget):
             return
 
         self._update_poster(anime)
+        self._update_source_selector(entry)
 
-        self.detail_title.setText(anime.title)
+        self.detail_title.setText(entry.title)
         checked = (
-            anime.last_check_at.strftime("%d.%m.%Y %H:%M")
-            if anime.last_check_at
+            entry.last_check_at.strftime("%d.%m.%Y %H:%M")
+            if entry.last_check_at
             else "ещё не проверялось"
         )
-        status = "ошибка: " + anime.last_error if anime.last_error else "в порядке"
-        self.detail_meta.setText(
-            f"Источник: {anime.source} · Проверено: {checked} · Состояние: {status}\n{anime.url}"
-        )
+        errors = [f"{a.source}: {a.last_error}" for a in entry.animes if a.last_error]
+        status = "; ".join(errors) if errors else "в порядке"
+        sources = " + ".join(entry.sources)
+        lines = [
+            f"Источник: {sources} · Проверено: {checked} · Состояние: {status}",
+            *[a.url for a in entry.animes],
+        ]
+        self.detail_meta.setText("\n".join(lines))
 
         # Сигналы чекбоксов не должны срабатывать от программной установки.
-        for widget, value in ((self.auto_check, anime.auto_download), (self.favorite_check, anime.is_favorite)):
+        for widget, value in ((self.auto_check, entry.auto_download), (self.favorite_check, entry.is_favorite)):
             widget.blockSignals(True)
             widget.setChecked(value)
             widget.blockSignals(False)
@@ -483,13 +582,41 @@ class LibraryView(QWidget):
         self.poster.setPixmap(pixmap)
         self.poster.setVisible(True)
 
+    def _update_source_selector(self, entry: LibraryEntry) -> None:
+        if not entry.is_merged:
+            return
+        self.source_box_detail.blockSignals(True)
+        self.source_box_detail.clear()
+        for anime in entry.animes:
+            self.source_box_detail.addItem(anime.source, anime.id)
+        self.source_box_detail.setCurrentIndex(
+            max(self.source_box_detail.findData(entry.primary.id), 0)
+        )
+        self.source_box_detail.blockSignals(False)
+
+    def _on_primary_source_changed(self) -> None:
+        entry = self._current_entry
+        if entry is None or not entry.is_merged:
+            return
+        if entry.auto_download:
+            # Переключение источника при включённой автозагрузке = перенос флага.
+            self._on_auto_toggled(True)
+
     def _on_auto_toggled(self, checked: bool) -> None:
-        if self._current:
-            self.auto_download_toggled.emit(self._current, checked)
+        entry = self._current_entry
+        if entry is None:
+            return
+        chosen = self.source_box_detail.currentData() if entry.is_merged else entry.primary.id
+        for anime in entry.animes:
+            # У объединённой записи автозагрузка живёт ровно на одном источнике.
+            self.auto_download_toggled.emit(anime, checked and anime.id == chosen)
 
     def _on_favorite_toggled(self, checked: bool) -> None:
-        if self._current:
-            self.favorite_toggled.emit(self._current, checked)
+        entry = self._current_entry
+        if entry is None:
+            return
+        for anime in entry.animes:
+            self.favorite_toggled.emit(anime, checked)
 
     def _on_release_double_click(self, index: QModelIndex) -> None:
         release = self.release_model.release_at(index.row())
@@ -500,9 +627,10 @@ class LibraryView(QWidget):
 
     def _anime_menu(self, position: QPoint) -> None:
         index = self.anime_list.indexAt(position)
-        anime = self.anime_model.anime_at(index.row()) if index.isValid() else None
-        if anime is None:
+        entry = self.anime_model.entry_at(index.row()) if index.isValid() else None
+        if entry is None:
             return
+        anime = entry.primary
 
         menu = QMenu(self)
         check = QAction("Проверить обновления", menu)

@@ -19,7 +19,7 @@ from atsm.gui.icons import app_icon  # noqa: E402
 from atsm.gui.library_view import LibraryView  # noqa: E402
 from atsm.gui.models import (  # noqa: E402
     RELEASE_ROLE,
-    AnimeListModel,
+    LibraryModel,
     HistoryTableModel,
     ReleaseTableModel,
 )
@@ -193,7 +193,7 @@ class TestLibraryView:
         model = view.release_model
         assert model.rowCount() == 3
         assert model.data(model.index(0, 0)) == "Серия 3"
-        assert model.data(model.index(0, 1)).endswith("МБ")
+        assert model.data(model.index(0, 3)).endswith("МБ")
 
     def test_archive_is_not_labelled_new(self, qtbot, seeded_ctx) -> None:
         """Импортированный архив не должен выглядеть как двести новых серий."""
@@ -203,17 +203,19 @@ class TestLibraryView:
         view.set_releases(seeded_ctx.repos.releases.list_for_anime(anime.id))
 
         model = view.release_model
-        statuses = [model.data(model.index(row, 4)) for row in range(model.rowCount())]
+        statuses = [model.data(model.index(row, 6)) for row in range(model.rowCount())]
         assert statuses[0] == "Новая"          # вышла после подписки
         assert statuses[1:] == ["В архиве", "В архиве"]
 
 
 class TestModels:
     def test_anime_tooltip(self, seeded_ctx) -> None:
-        model = AnimeListModel()
-        model.set_items(seeded_ctx.repos.anime.list())
+        from atsm.core.grouping import build_groups
+
+        model = LibraryModel()
+        model.set_groups(build_groups(seeded_ctx.repos.anime.list()))
         tooltip = model.data(model.index(0, 0), Qt.ItemDataRole.ToolTipRole)
-        assert "Источник: fake" in tooltip
+        assert "fake: проверено" in tooltip
 
     def test_release_role_returns_object(self, seeded_ctx) -> None:
         model = ReleaseTableModel()
@@ -580,6 +582,33 @@ class TestAutofetchMetadata:
         assert window._busy is False
         assert window.add_button.isEnabled()
         window.scheduler.shutdown()
+
+
+class TestBackfill:
+    def test_absent_franchise_is_not_refetched(self, seeded_ctx) -> None:
+        """«Франшизы нет» и «ещё не спрашивали» — разные состояния, иначе
+        одиночные тайтлы перезапрашивались бы при каждом запуске."""
+        from atsm.metadata.base import AnimeMetadata
+
+        repos = seeded_ctx.repos
+        anime_id = repos.anime.list()[0].id
+        repos.metadata.save(
+            anime_id, AnimeMetadata("shikimori", "44218", title_ru="Тест", franchise=None)
+        )
+
+        assert repos.metadata.missing_franchise() == []
+        assert repos.metadata.get(anime_id)["franchise"] == ""
+
+    def test_missing_franchise_detected(self, seeded_ctx, db) -> None:
+        from atsm.metadata.base import AnimeMetadata
+
+        repos = seeded_ctx.repos
+        anime_id = repos.anime.list()[0].id
+        repos.metadata.save(anime_id, AnimeMetadata("shikimori", "44218", title_ru="Тест"))
+        with seeded_ctx.db.transaction() as conn:
+            conn.execute("UPDATE anime_metadata SET franchise = NULL")
+
+        assert repos.metadata.missing_franchise() == [anime_id]
 
 
 class TestTrayAndIcons:
