@@ -14,7 +14,7 @@ from atsm.parsers.anilibria import AniLibriaParser
 
 FIXTURE = Path(__file__).parent / "fixtures" / "anilibria_release.json"
 ALIAS = "gaikotsu-kishi-sama-tadaima-isekai-e-odekakechuu-ii"
-PAGE_URL = f"https://anilibria.top/anime/releases/release/{ALIAS}/"
+PAGE_URL = f"https://aniliberty.top/anime/releases/release/{ALIAS}/"
 
 
 @pytest.fixture(scope="module")
@@ -38,7 +38,7 @@ def test_release_parsed(info) -> None:
     assert info.slug == ALIAS
     assert info.status == "ongoing"
     assert info.url == PAGE_URL
-    assert info.poster_url.startswith("https://anilibria.top/storage/")
+    assert info.poster_url.startswith("https://aniliberty.top/storage/")
 
 
 def test_two_quality_tracks(info) -> None:
@@ -122,10 +122,12 @@ class TestUrls:
     @pytest.mark.parametrize(
         "url",
         [
+            "https://aniliberty.top/anime/releases/release/some-alias/",
+            "https://aniliberty.top/anime/releases/release/some-alias",
+            "https://aniliberty.top/anime/releases/release/some-alias/episodes",
+            "https://aniliberty.top/anime/releases/release/some-alias?x=1",
+            # Старый домен: страницы редиректят на новый, но ссылка должна работать.
             "https://anilibria.top/anime/releases/release/some-alias/",
-            "https://anilibria.top/anime/releases/release/some-alias",
-            "https://anilibria.top/anime/releases/release/some-alias/1",
-            "https://anilibria.top/anime/releases/release/some-alias?x=1",
         ],
     )
     def test_alias_extracted(self, parser: AniLibriaParser, url: str) -> None:
@@ -133,7 +135,21 @@ class TestUrls:
 
     def test_bad_url(self, parser: AniLibriaParser) -> None:
         with pytest.raises(ParseError):
-            parser.extract_slug("https://anilibria.top/anime/releases/")
+            parser.extract_slug("https://aniliberty.top/anime/releases/")
+
+    def test_both_domains_routed(self) -> None:
+        """Проект переехал с anilibria.top на aniliberty.top — работать
+        должны обе ссылки, иначе старые подписки отвалятся."""
+        registry = ParserRegistry(Settings())
+        for host in ("aniliberty.top", "anilibria.top"):
+            url = f"https://{host}/anime/releases/release/bleach/episodes"
+            assert registry.for_url(url).name == "anilibria"
+
+    def test_host_from_link_is_tried_first(self, parser: AniLibriaParser) -> None:
+        hosts = parser.hosts_to_try("https://anilibria.top/anime/releases/release/x/")
+        assert hosts[0] == "anilibria.top"
+        assert "aniliberty.top" in hosts
+        assert len(hosts) == len(set(hosts))
 
     def test_registry_routes_by_domain(self) -> None:
         registry = ParserRegistry(Settings())

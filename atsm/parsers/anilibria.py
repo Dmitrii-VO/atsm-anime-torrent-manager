@@ -1,10 +1,10 @@
-"""Парсер AniLibria (anilibria.top).
+"""Парсер AniLiberty (aniliberty.top, бывш. anilibria.top).
 
 Работает через JSON API, а не по разметке — переверстка сайта источнику не
 страшна. Модель раздач принципиально иная, чем у astar:
 
   * astar    — один торрент на серию, их сотни;
-  * AniLibria — две-три раздачи на весь релиз (AVC/HEVC), каждая содержит
+  * AniLiberty — две-три раздачи на весь релиз (AVC/HEVC), каждая содержит
     все вышедшие серии и **обновляется на месте** по мере выхода новых.
 
 Отсюда главное решение: идентификатор раздачи включает hash торрента, иначе
@@ -31,8 +31,10 @@ from .base import (
     SourceUnreachable,
 )
 
-BASE = "https://anilibria.top"
-API = f"{BASE}/api/v1"
+# Проект переехал: anilibria.top отдаёт 302 на aniliberty.top, API работает
+# на обоих. Первый в списке — основной, остальные держим как запасные,
+# чтобы подписки пережили следующее переименование.
+HOSTS = ("aniliberty.top", "anilibria.top")
 
 ALIAS_RE = re.compile(r"/release/(?P<alias>[^/?#]+)")
 RANGE_RE = re.compile(r"(\d+)(?:\s*-\s*(\d+))?")
@@ -40,8 +42,8 @@ RANGE_RE = re.compile(r"(\d+)(?:\s*-\s*(\d+))?")
 
 class AniLibriaParser(BaseParser):
     name = "anilibria"
-    display_name = "AniLibria"
-    domains = ("anilibria.top",)
+    display_name = "AniLiberty"
+    domains = HOSTS
 
     def __init__(
         self,
@@ -63,37 +65,53 @@ class AniLibriaParser(BaseParser):
         """Из ссылки вида /anime/releases/release/<alias>/ достаёт alias."""
         match = ALIAS_RE.search(urlparse(url).path)
         if not match:
-            raise ParseError(f"Не удалось определить релиз AniLibria в ссылке: {url}")
+            raise ParseError(f"Не удалось определить релиз AniLiberty в ссылке: {url}")
         return match.group("alias")
 
     @staticmethod
-    def page_url(alias: str) -> str:
-        return f"{BASE}/anime/releases/release/{alias}/"
+    def page_url(alias: str, host: str = HOSTS[0]) -> str:
+        return f"https://{host}/anime/releases/release/{alias}/"
+
+    def hosts_to_try(self, url: str) -> list[str]:
+        """Хост из ссылки первым, затем остальные известные."""
+        ordered: list[str] = []
+        for host in (urlparse(url).hostname, *HOSTS):
+            if host and host not in ordered:
+                ordered.append(host)
+        return ordered
 
     def _get(self, url: str) -> requests.Response:
-        self.limiter.wait("anilibria.top")
+        self.limiter.wait("aniliberty.top")
         return self.session.get(url, timeout=self.timeout, allow_redirects=True)
 
     # --- загрузка --------------------------------------------------------
 
     def fetch(self, url: str) -> AnimeInfo:
         alias = self.extract_slug(url)
-        try:
-            response = self._get(f"{API}/anime/releases/{alias}")
-        except requests.RequestException as exc:
-            raise SourceUnreachable(f"AniLibria недоступна: {exc}") from exc
+        errors: list[str] = []
 
-        if response.status_code == 404:
-            raise ParseError(f"Релиз «{alias}» на AniLibria не найден")
-        if response.status_code != 200:
-            raise SourceUnreachable(f"AniLibria вернула HTTP {response.status_code}")
+        for host in self.hosts_to_try(url):
+            try:
+                response = self._get(f"https://{host}/api/v1/anime/releases/{alias}")
+            except requests.RequestException as exc:
+                errors.append(f"{host}: {type(exc).__name__}")
+                logger.debug("Домен {} недоступен: {}", host, exc)
+                continue
 
-        try:
-            data = response.json()
-        except ValueError as exc:
-            raise ParseError(f"AniLibria вернула не JSON: {exc}") from exc
+            if response.status_code == 404:
+                raise ParseError(f"Релиз «{alias}» не найден на {host}")
+            if response.status_code != 200:
+                errors.append(f"{host}: HTTP {response.status_code}")
+                continue
 
-        return self.parse(data, alias)
+            try:
+                data = response.json()
+            except ValueError as exc:
+                raise ParseError(f"{host} вернул не JSON: {exc}") from exc
+
+            return self.parse(data, alias, host=host)
+
+        raise SourceUnreachable("AniLiberty не отвечает: " + "; ".join(errors))
 
     def download_torrent(self, release: ReleaseInfo) -> bytes:
         if not release.torrent_url:
@@ -111,9 +129,9 @@ class AniLibriaParser(BaseParser):
 
     # --- разбор ----------------------------------------------------------
 
-    def parse(self, data: dict, alias: str) -> AnimeInfo:
+    def parse(self, data: dict, alias: str, host: str = HOSTS[0]) -> AnimeInfo:
         if not isinstance(data, dict) or "name" not in data:
-            raise ParseError("Неожиданная структура ответа AniLibria")
+            raise ParseError("Неожиданная структура ответа AniLiberty")
 
         torrents = data.get("torrents") or []
         if not torrents:
@@ -124,7 +142,7 @@ class AniLibriaParser(BaseParser):
                 + (" (заблокирован правообладателем)" if data.get("is_blocked_by_copyrights") else "")
             )
 
-        releases = [self._parse_torrent(t) for t in torrents]
+        releases = [self._parse_torrent(t, host) for t in torrents]
         releases = [r for r in releases if r is not None]
         if not releases:
             raise LayoutChanged("Раздачи есть, но ни одну не удалось разобрать")
@@ -134,10 +152,10 @@ class AniLibriaParser(BaseParser):
         poster = (data.get("poster") or {}).get("src")
         return AnimeInfo(
             title=self._title(data),
-            url=self.page_url(alias),
+            url=self.page_url(alias, host),
             slug=alias,
             source=self.name,
-            poster_url=f"{BASE}{poster}" if poster else None,
+            poster_url=f"https://{host}{poster}" if poster else None,
             status="ongoing" if data.get("is_ongoing") else "completed",
             releases=releases,
         )
@@ -147,10 +165,10 @@ class AniLibriaParser(BaseParser):
         names = data.get("name") or {}
         title = names.get("main") or names.get("english") or ""
         if not title:
-            raise ParseError("В ответе AniLibria нет названия релиза")
+            raise ParseError("В ответе AniLiberty нет названия релиза")
         return title.strip()
 
-    def _parse_torrent(self, torrent: dict) -> ReleaseInfo | None:
+    def _parse_torrent(self, torrent: dict, host: str = HOSTS[0]) -> ReleaseInfo | None:
         torrent_id = torrent.get("id")
         info_hash = torrent.get("hash")
         if not torrent_id or not info_hash:
@@ -175,7 +193,7 @@ class AniLibriaParser(BaseParser):
             leechers=torrent.get("leechers"),
             downloads=torrent.get("completed_times"),
             published_at=self._parse_date(torrent.get("updated_at") or torrent.get("created_at")),
-            torrent_url=f"{API}/anime/torrents/{torrent_id}/file",
+            torrent_url=f"https://{host}/api/v1/anime/torrents/{torrent_id}/file",
             magnet=torrent.get("magnet"),
         )
 
@@ -205,5 +223,5 @@ class AniLibriaParser(BaseParser):
         try:
             return datetime.fromisoformat(value).date()
         except ValueError:
-            logger.debug("AniLibria вернула неразбираемую дату: {}", value)
+            logger.debug("AniLiberty вернул неразбираемую дату: {}", value)
             return None
