@@ -50,7 +50,7 @@ class FakeParser(BaseParser):
         if self.error:
             raise self.error
         self.downloaded.append(release.external_id)
-        return b"d8:announce4:test4:infod4:name5:testee"
+        return b"d8:announce4:test4:infod4:name4:testee"
 
 
 class FakeRegistry:
