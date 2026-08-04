@@ -264,10 +264,36 @@ class MainWindow(QMainWindow):
         anime = dialog.result_info
         if anime is None:
             return
+        self._after_subscription_added(anime)
+
+    def _after_subscription_added(self, anime: Anime) -> None:
         self.refresh_all()
         self.tabs.setCurrentIndex(1)
         self.library.select_anime(anime.id)
         self.status_label.setText(f"Добавлена подписка «{anime.title}»")
+
+        if self.ctx.settings.metadata_autofetch:
+            self.autofetch_metadata(anime)
+
+    def autofetch_metadata(self, anime: Anime) -> None:
+        """Тихое обогащение: интерфейс не блокируется, отказ справочника
+        не должен выглядеть как проблема с только что добавленной подпиской."""
+        self.workers.start(
+            self.metadata.enrich,
+            anime.id,
+            on_done=lambda _: self._on_autofetch_done(anime),
+            on_failed=lambda exc: self._on_autofetch_failed(anime, exc),
+        )
+
+    def _on_autofetch_done(self, anime: Anime) -> None:
+        logger.info("Справка по «{}» загружена автоматически", anime.title)
+        self.refresh_all()
+
+    def _on_autofetch_failed(self, anime: Anime, exc: Exception) -> None:
+        logger.debug("Справка по «{}» не загружена: {}", anime.title, exc)
+        self.status_label.setText(
+            f"Подписка «{anime.title}» добавлена, справочные данные не найдены"
+        )
 
     def remove_anime(self, anime: Anime) -> None:
         if not confirm(self, "Удалить подписку", f"Удалить «{anime.title}» вместе с историей?"):

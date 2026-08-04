@@ -525,6 +525,63 @@ class TestWorkers:
         window.scheduler.shutdown()
 
 
+class TestAutofetchMetadata:
+    """Справка подтягивается сразу при добавлении подписки, чтобы карточка
+    не приезжала пустой и не требовала отдельного клика."""
+
+    def _window(self, qtbot, ctx):
+        from atsm.gui.main_window import MainWindow
+
+        window = MainWindow(ctx)
+        qtbot.addWidget(window)
+        return window
+
+    def test_enrich_started_after_add(self, qtbot, seeded_ctx) -> None:
+        window = self._window(qtbot, seeded_ctx)
+        calls: list[int] = []
+        window.metadata.enrich = lambda anime_id, *a, **kw: calls.append(anime_id)
+
+        anime = seeded_ctx.repos.anime.list()[0]
+        window._after_subscription_added(anime)
+
+        qtbot.waitUntil(lambda: calls == [anime.id], timeout=5000)
+        window.scheduler.shutdown()
+
+    def test_disabled_by_setting(self, qtbot, seeded_ctx) -> None:
+        seeded_ctx.settings.metadata_autofetch = False
+        window = self._window(qtbot, seeded_ctx)
+        calls: list[int] = []
+        window.metadata.enrich = lambda anime_id, *a, **kw: calls.append(anime_id)
+
+        window._after_subscription_added(seeded_ctx.repos.anime.list()[0])
+
+        qtbot.wait(300)
+        assert calls == []
+        window.scheduler.shutdown()
+
+    def test_failure_does_not_block_ui(self, qtbot, seeded_ctx) -> None:
+        """Отказ справочника не должен выглядеть как проблема с подпиской."""
+        from atsm.metadata import MetadataError
+
+        window = self._window(qtbot, seeded_ctx)
+
+        def boom(*args, **kwargs):
+            raise MetadataError("ничего не найдено")
+
+        window.metadata.enrich = boom
+        anime = seeded_ctx.repos.anime.list()[0]
+        window._after_subscription_added(anime)
+
+        qtbot.waitUntil(
+            lambda: "справочные данные не найдены" in window.status_label.full_text(),
+            timeout=5000,
+        )
+        # Интерфейс остаётся рабочим: обогащение идёт мимо состояния занятости.
+        assert window._busy is False
+        assert window.add_button.isEnabled()
+        window.scheduler.shutdown()
+
+
 class TestTrayAndIcons:
     def test_badge_icon_renders(self) -> None:
         assert not app_icon().isNull()

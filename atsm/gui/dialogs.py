@@ -185,6 +185,12 @@ class SettingsDialog(QDialog):
         self.notifications.setChecked(self.settings.notifications_enabled)
         form.addRow("", self.notifications)
 
+        self.metadata_autofetch = QCheckBox(
+            "Загружать справочные данные при добавлении подписки"
+        )
+        self.metadata_autofetch.setChecked(self.settings.metadata_autofetch)
+        form.addRow("", self.metadata_autofetch)
+
         self.theme = QComboBox()
         for key, label in THEME_LABELS.items():
             self.theme.addItem(label, key)
@@ -300,6 +306,7 @@ class SettingsDialog(QDialog):
         self.settings.minimize_to_tray = self.minimize_to_tray.isChecked()
         self.settings.autostart = self.autostart.isChecked()
         self.settings.notifications_enabled = self.notifications.isChecked()
+        self.settings.metadata_autofetch = self.metadata_autofetch.isChecked()
         self.settings.log_level = self.log_level.currentText()
         self.settings.theme = self.theme.currentData()
 

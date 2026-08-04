@@ -99,6 +99,8 @@ class Settings(BaseModel):
     minimize_to_tray: bool = True
     autostart: bool = False
     notifications_enabled: bool = True
+    # Подтягивать данные Shikimori/AniList сразу при добавлении подписки.
+    metadata_autofetch: bool = True
     theme: str = "dark"
     log_level: str = "INFO"
     log_retention_days: int = 14
