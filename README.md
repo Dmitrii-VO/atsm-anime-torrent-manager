@@ -26,6 +26,20 @@ python -m atsm --data-dir D:\atsm-data --no-gui
 `--data-dir` — переносной профиль вместо `%APPDATA%`, `--no-gui` — поднять ядро без интерфейса
 (проверка миграций и состояния базы).
 
+## Сборка .exe
+
+```bash
+pip install pyinstaller
+```
+
+```bash
+python tools/make_icon.py && pyinstaller atsm.spec --noconfirm
+```
+
+Готовое приложение — `dist/ATSM/ATSM.exe` (около 87 МБ вместе с Qt). Папку `dist/ATSM`
+можно целиком перенести на другую машину, Python там не нужен. Иконка не хранится в
+репозитории: `tools/make_icon.py` рисует её кодом перед сборкой.
+
 ## Как пользоваться
 
 1. **Добавить подписку** — вставить ссылку на страницу аниме, например

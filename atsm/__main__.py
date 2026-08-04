@@ -30,8 +30,13 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if args.no_gui:
+        from .parsers import ParserRegistry
+
         logger.info("Каталог данных: {}", ctx.paths.root)
         logger.info("Таблицы: {}", ", ".join(ctx.db.table_names()))
+        # Заодно проверяет, что плагины находятся в собранном .exe.
+        parsers = ParserRegistry(ctx.settings).all()
+        logger.info("Источники: {}", ", ".join(p.display_name for p in parsers) or "нет")
         logger.info("Подписок: {}", len(ctx.repos.anime.list()))
         logger.info("Новых серий: {}", ctx.repos.releases.feed_count())
         ctx.shutdown()

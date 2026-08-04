@@ -8,6 +8,7 @@ htmlcov/
 build/
 dist/
 *.spec
+!atsm.spec
 *.db
 *.db-wal
 *.db-shm
