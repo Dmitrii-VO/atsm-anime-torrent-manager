@@ -1,0 +1,5 @@
+* text=auto
+
+# Снимки страниц — байт в байт (windows-1251), никакой нормализации переводов строк.
+tests/fixtures/** -text
+*.torrent binary
