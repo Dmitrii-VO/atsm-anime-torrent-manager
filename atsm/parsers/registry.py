@@ -33,7 +33,9 @@ class ParserRegistry:
             importlib.import_module(f"{__package__}.{module_info.name}")
 
         for parser_cls in _all_subclasses(BaseParser):
-            if not parser_cls.name:
+            # Только плагины из этого пакета: подклассы, объявленные снаружи
+            # (например, заглушки в тестах), реестру не принадлежат.
+            if not parser_cls.name or not parser_cls.__module__.startswith(__package__ + "."):
                 continue
             self._parsers[parser_cls.name] = self._instantiate(parser_cls)
         logger.debug("Загружены парсеры: {}", ", ".join(sorted(self._parsers)))
