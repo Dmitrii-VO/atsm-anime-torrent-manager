@@ -17,17 +17,21 @@ from typing import Iterator
 
 from loguru import logger
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _load_initial_schema() -> str:
     return resources.files(__package__).joinpath("schema.sql").read_text(encoding="utf-8")
 
 
+# Сборники вида «Серии 27-28»: начало диапазона в episode, конец здесь.
+_MIGRATION_002 = "ALTER TABLE release ADD COLUMN episode_end INTEGER;"
+
 # Миграции применяются по порядку; версия N приводит схему к состоянию N.
 # Новая версия — новая запись здесь, ничего существующего не меняем.
 MIGRATIONS: dict[int, callable] = {
     1: _load_initial_schema,
+    2: lambda: _MIGRATION_002,
 }
 
 
