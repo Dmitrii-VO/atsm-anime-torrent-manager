@@ -19,6 +19,7 @@ datas = [
 # Модули парсеров подгружаются реестром динамически, статический анализ их не видит.
 hiddenimports = [
     "atsm.parsers.astar",
+    "atsm.parsers.anilibria",
     "apscheduler.schedulers.background",
     "apscheduler.executors.pool",
     "apscheduler.triggers.interval",

@@ -19,6 +19,7 @@ from ..torrent.bencode import BencodeError, info_hash
 from .models import HistoryAction, Release, ReleaseState
 
 _UNSAFE_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_MAGNET_HASH = re.compile(r"urn:btih:([0-9a-fA-F]{40})")
 
 
 class TorrentService:
@@ -63,6 +64,9 @@ class TorrentService:
 
         try:
             if release.magnet:
+                # Хеш нужен, чтобы позже спросить у клиента, скачана ли раздача.
+                # У magnet он лежит прямо в ссылке — качать файл ради него не надо.
+                self._remember_magnet_hash(release)
                 result = self.client.add_magnet(release.magnet)
             else:
                 data = self.fetch_torrent(release)
@@ -145,6 +149,11 @@ class TorrentService:
         return updated
 
     # --- служебное -------------------------------------------------------
+
+    def _remember_magnet_hash(self, release: Release) -> None:
+        match = _MAGNET_HASH.search(release.magnet or "")
+        if match:
+            self.repos.releases.set_info_hash(release.id, match.group(1).lower())
 
     def _remember_hash(self, release: Release, data: bytes) -> None:
         try:

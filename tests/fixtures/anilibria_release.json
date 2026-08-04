@@ -1,0 +1,270 @@
+{
+ "id": 10228,
+ "type": {
+  "value": "TV",
+  "description": "ТВ"
+ },
+ "year": 2026,
+ "name": {
+  "main": "Рыцарь-скелет вступает в параллельный мир 2",
+  "english": "Gaikotsu Kishi-sama, Tadaima Isekai e Odekakechuu II",
+  "alternative": "рыцарь скелет в другом мире"
+ },
+ "alias": "gaikotsu-kishi-sama-tadaima-isekai-e-odekakechuu-ii",
+ "season": {
+  "value": "summer",
+  "description": "Лето"
+ },
+ "poster": {
+  "src": "/storage/releases/posters/10228/i3L0wWk2BbpMLxLgRF1srAS5HTwc1ubZ.jpg",
+  "preview": "/storage/releases/posters/10228/i3L0wWk2BbpMLxLgRF1srAS5HTwc1ubZ.jpg",
+  "thumbnail": "/storage/releases/posters/10228/upmr9BnkIM20HxZKoQdinQuMYOVD0WwD.jpg",
+  "optimized": {
+   "src": "/storage/releases/posters/10228/UHNCDLN1dwLlMkCUJEz31Dgz1JmGEydn.webp",
+   "preview": "/storage/releases/posters/10228/UHNCDLN1dwLlMkCUJEz31Dgz1JmGEydn.webp",
+   "thumbnail": "/storage/releases/posters/10228/MwlLO7gDgJouqdpAEs5CBwD3aNEpis7V.webp"
+  }
+ },
+ "fresh_at": "2026-08-04T09:59:04+00:00",
+ "created_at": "2026-05-21T00:27:23+00:00",
+ "updated_at": "2026-08-04T09:54:56+00:00",
+ "is_ongoing": true,
+ "age_rating": {
+  "value": "R16_PLUS",
+  "label": "16+",
+  "is_adult": false,
+  "description": "Для людей, достигших возраста шестнадцати лет (16+)"
+ },
+ "publish_day": {
+  "value": 2,
+  "description": "Вторник"
+ },
+ "description": "Путешествие Арка — геймера, застрявшего в теле могущественного рыцаря-скелета, — продолжается. Несмотря на жуткий облик, скрытый под тяжёлой бронёй, этот необычный наёмник обладает добрым сердцем и готов прийти на помощь любому, кто попал в беду. Вместе с верным питомцем По́нтой он уверенно прокладывает себе путь через неизведанные земли нового мира.\r\nНа этот раз его главная цель — помочь эльфийской воительнице Ариа́нне освободить её соплеменников из рабства. Впереди команду ждёт опасный поход вглубь человеческих королевств, столкновение с теневыми работорговцами и заговоры знати. Противникам остаётся лишь посочувствовать, ведь в бой вступает скрытый паладин с максимальным уровнем прокачки.",
+ "notification": null,
+ "episodes_total": 12,
+ "external_player": null,
+ "is_in_production": true,
+ "is_blocked_by_geo": false,
+ "is_blocked_by_copyrights": false,
+ "added_in_users_favorites": 9019,
+ "average_duration_of_episode": 24,
+ "added_in_planned_collection": 475,
+ "added_in_watched_collection": 21,
+ "added_in_watching_collection": 981,
+ "added_in_postponed_collection": 23,
+ "added_in_abandoned_collection": 18,
+ "genres": [
+  {
+   "id": 29,
+   "name": "Фэнтези",
+   "image": {
+    "preview": "/storage/anime/genres/images/29/BqPfwYPC7STQ0lsv6LsdyDm594Tnz2N5.jpg",
+    "thumbnail": "/storage/anime/genres/images/29/bkKObn59vWFAd8wcAPINJnI8EZLZB8gH.jpg",
+    "optimized": {
+     "preview": "/storage/anime/genres/images/29/BayKuKbzHQkKMlfFyUTZAoExCjqkHDfh.webp",
+     "thumbnail": "/storage/anime/genres/images/29/yVUCPUfGguBeZ280YyS5UhawlR3F1fS0.webp"
+    }
+   },
+   "total_releases": 632
+  },
+  {
+   "id": 14,
+   "name": "Экшен",
+   "image": {
+    "preview": "/storage/anime/genres/images/14/HVxcEvm7oA6JQvnMKKgSdYJ90ab8Zoco.jpg",
+    "thumbnail": "/storage/anime/genres/images/14/7JeDltmth6vVUs1bG4OHq6ywRYVjbYoY.jpg",
+    "optimized": {
+     "preview": "/storage/anime/genres/images/14/FNZP4gLtDFe67Ynbthc08wRsTp5q94sx.webp",
+     "thumbnail": "/storage/anime/genres/images/14/gfzjNkJYPgeaIyQxXveaP5UblbQWadEF.webp"
+    }
+   },
+   "total_releases": 689
+  }
+ ],
+ "torrents": [
+  {
+   "id": 39268,
+   "hash": "fe18306837f646ee24d8bbb5eaa94da00e5ac193",
+   "size": 1299594376,
+   "type": {
+    "value": "WEBRip",
+    "description": "WEBRip"
+   },
+   "label": "Gaikotsu Kishi-sama, Tadaima Isekai e Odekakechuu II - AniLiberty.TOP [WEBRip 1080p][HEVC][1-4]",
+   "codec": {
+    "value": "x265/HEVC",
+    "label": "HEVC",
+    "description": "x265/HEVC",
+    "label_color": "#FFEB3B",
+    "label_is_visible": true
+   },
+   "color": {
+    "value": "10Bit",
+    "description": "10-bit"
+   },
+   "magnet": "magnet:?xt=urn:btih:fe18306837f646ee24d8bbb5eaa94da00e5ac193&dn=Gaikotsu+Kishi-sama+Tadaima+Isekai+e+Odekake-chuu+II+-+AniLiberty+%5BWEBRip+1080p+HEVC%5D&xl=1299594376&tr=http://tr.libria.fun:2710/announce&tr=http://retracker.local/announce",
+   "seeders": 54,
+   "quality": {
+    "value": "1080p",
+    "description": "1080p"
+   },
+   "bitrate": null,
+   "filename": "Gaikotsu Kishi-sama, Tadaima Isekai e Odekakechuu II - AniLiberty.TOP [WEBRip 1080p][HEVC][1-4].torrent",
+   "leechers": 4,
+   "sort_order": 0,
+   "created_at": "2026-07-05T15:39:54+00:00",
+   "updated_at": "2026-07-30T20:07:15+00:00",
+   "is_hardsub": false,
+   "description": "1-4",
+   "completed_times": 2003,
+   "release": {
+    "id": 10228,
+    "type": {
+     "value": "TV",
+     "description": "ТВ"
+    },
+    "year": 2026,
+    "name": {
+     "main": "Рыцарь-скелет вступает в параллельный мир 2",
+     "english": "Gaikotsu Kishi-sama, Tadaima Isekai e Odekakechuu II",
+     "alternative": "рыцарь скелет в другом мире"
+    },
+    "alias": "gaikotsu-kishi-sama-tadaima-isekai-e-odekakechuu-ii",
+    "season": {
+     "value": "summer",
+     "description": "Лето"
+    },
+    "poster": {
+     "src": "/storage/releases/posters/10228/i3L0wWk2BbpMLxLgRF1srAS5HTwc1ubZ.jpg",
+     "preview": "/storage/releases/posters/10228/i3L0wWk2BbpMLxLgRF1srAS5HTwc1ubZ.jpg",
+     "thumbnail": "/storage/releases/posters/10228/upmr9BnkIM20HxZKoQdinQuMYOVD0WwD.jpg",
+     "optimized": {
+      "src": "/storage/releases/posters/10228/UHNCDLN1dwLlMkCUJEz31Dgz1JmGEydn.webp",
+      "preview": "/storage/releases/posters/10228/UHNCDLN1dwLlMkCUJEz31Dgz1JmGEydn.webp",
+      "thumbnail": "/storage/releases/posters/10228/MwlLO7gDgJouqdpAEs5CBwD3aNEpis7V.webp"
+     }
+    },
+    "fresh_at": "2026-08-04T09:59:04+00:00",
+    "created_at": "2026-05-21T00:27:23+00:00",
+    "updated_at": "2026-08-04T09:54:56+00:00",
+    "is_ongoing": true,
+    "age_rating": {
+     "value": "R16_PLUS",
+     "label": "16+",
+     "is_adult": false,
+     "description": "Для людей, достигших возраста шестнадцати лет (16+)"
+    },
+    "publish_day": {
+     "value": 2,
+     "description": "Вторник"
+    },
+    "description": "Путешествие Арка — геймера, застрявшего в теле могущественного рыцаря-скелета, — продолжается. Несмотря на жуткий облик, скрытый под тяжёлой бронёй, этот необычный наёмник обладает добрым сердцем и готов прийти на помощь любому, кто попал в беду. Вместе с верным питомцем По́нтой он уверенно прокладывает себе путь через неизведанные земли нового мира.\r\nНа этот раз его главная цель — помочь эльфийской воительнице Ариа́нне освободить её соплеменников из рабства. Впереди команду ждёт опасный поход вглубь человеческих королевств, столкновение с теневыми работорговцами и заговоры знати. Противникам остаётся лишь посочувствовать, ведь в бой вступает скрытый паладин с максимальным уровнем прокачки.",
+    "notification": null,
+    "episodes_total": 12,
+    "external_player": null,
+    "is_in_production": true,
+    "is_blocked_by_geo": false,
+    "is_blocked_by_copyrights": false,
+    "added_in_users_favorites": 9019,
+    "average_duration_of_episode": 24,
+    "added_in_planned_collection": 475,
+    "added_in_watched_collection": 21,
+    "added_in_watching_collection": 981,
+    "added_in_postponed_collection": 23,
+    "added_in_abandoned_collection": 18
+   }
+  },
+  {
+   "id": 39331,
+   "hash": "3e7bd40a48853c3c985cceee36ae0c762d5ec43f",
+   "size": 7484211905,
+   "type": {
+    "value": "WEBRip",
+    "description": "WEBRip"
+   },
+   "label": "Gaikotsu Kishi-sama, Tadaima Isekai e Odekakechuu II - AniLiberty.TOP [WEBRip 1080p][AVC][1-5]",
+   "codec": {
+    "value": "x264/AVC",
+    "label": "AVC",
+    "description": "x264/AVC",
+    "label_color": null,
+    "label_is_visible": false
+   },
+   "color": {
+    "value": "8bit",
+    "description": "8-bit"
+   },
+   "magnet": "magnet:?xt=urn:btih:3e7bd40a48853c3c985cceee36ae0c762d5ec43f&dn=Gaikotsu+Kishi-sama+Tadaima+Isekai+e+Odekake-chuu+II+-+AniLiberty+%5BWEBRip+1080p%5D&xl=7484211905&tr=http://tr.libria.fun:2710/announce&tr=http://retracker.local/announce",
+   "seeders": 24,
+   "quality": {
+    "value": "1080p",
+    "description": "1080p"
+   },
+   "bitrate": null,
+   "filename": "Gaikotsu Kishi-sama, Tadaima Isekai e Odekakechuu II - AniLiberty.TOP [WEBRip 1080p][AVC][1-5].torrent",
+   "leechers": 27,
+   "sort_order": 0,
+   "created_at": "2026-07-05T14:02:43+00:00",
+   "updated_at": "2026-08-04T09:54:56+00:00",
+   "is_hardsub": false,
+   "description": "1-5",
+   "completed_times": 1608,
+   "release": {
+    "id": 10228,
+    "type": {
+     "value": "TV",
+     "description": "ТВ"
+    },
+    "year": 2026,
+    "name": {
+     "main": "Рыцарь-скелет вступает в параллельный мир 2",
+     "english": "Gaikotsu Kishi-sama, Tadaima Isekai e Odekakechuu II",
+     "alternative": "рыцарь скелет в другом мире"
+    },
+    "alias": "gaikotsu-kishi-sama-tadaima-isekai-e-odekakechuu-ii",
+    "season": {
+     "value": "summer",
+     "description": "Лето"
+    },
+    "poster": {
+     "src": "/storage/releases/posters/10228/i3L0wWk2BbpMLxLgRF1srAS5HTwc1ubZ.jpg",
+     "preview": "/storage/releases/posters/10228/i3L0wWk2BbpMLxLgRF1srAS5HTwc1ubZ.jpg",
+     "thumbnail": "/storage/releases/posters/10228/upmr9BnkIM20HxZKoQdinQuMYOVD0WwD.jpg",
+     "optimized": {
+      "src": "/storage/releases/posters/10228/UHNCDLN1dwLlMkCUJEz31Dgz1JmGEydn.webp",
+      "preview": "/storage/releases/posters/10228/UHNCDLN1dwLlMkCUJEz31Dgz1JmGEydn.webp",
+      "thumbnail": "/storage/releases/posters/10228/MwlLO7gDgJouqdpAEs5CBwD3aNEpis7V.webp"
+     }
+    },
+    "fresh_at": "2026-08-04T09:59:04+00:00",
+    "created_at": "2026-05-21T00:27:23+00:00",
+    "updated_at": "2026-08-04T09:54:56+00:00",
+    "is_ongoing": true,
+    "age_rating": {
+     "value": "R16_PLUS",
+     "label": "16+",
+     "is_adult": false,
+     "description": "Для людей, достигших возраста шестнадцати лет (16+)"
+    },
+    "publish_day": {
+     "value": 2,
+     "description": "Вторник"
+    },
+    "description": "Путешествие Арка — геймера, застрявшего в теле могущественного рыцаря-скелета, — продолжается. Несмотря на жуткий облик, скрытый под тяжёлой бронёй, этот необычный наёмник обладает добрым сердцем и готов прийти на помощь любому, кто попал в беду. Вместе с верным питомцем По́нтой он уверенно прокладывает себе путь через неизведанные земли нового мира.\r\nНа этот раз его главная цель — помочь эльфийской воительнице Ариа́нне освободить её соплеменников из рабства. Впереди команду ждёт опасный поход вглубь человеческих королевств, столкновение с теневыми работорговцами и заговоры знати. Противникам остаётся лишь посочувствовать, ведь в бой вступает скрытый паладин с максимальным уровнем прокачки.",
+    "notification": null,
+    "episodes_total": 12,
+    "external_player": null,
+    "is_in_production": true,
+    "is_blocked_by_geo": false,
+    "is_blocked_by_copyrights": false,
+    "added_in_users_favorites": 9019,
+    "average_duration_of_episode": 24,
+    "added_in_planned_collection": 475,
+    "added_in_watched_collection": 21,
+    "added_in_watching_collection": 981,
+    "added_in_postponed_collection": 23,
+    "added_in_abandoned_collection": 18
+   }
+  }
+ ]
+}

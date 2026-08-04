@@ -107,6 +107,31 @@ class TestQBittorrentClient:
         assert b"anime" in body and b"D:/Anime" in body
 
     @responses.activate
+    def test_pause_flag_sent_in_both_dialects(self, client: QBittorrentClient) -> None:
+        """qBittorrent 5.x переименовал paused в stopped: без второго ключа
+        «добавлять на паузе» молча не срабатывает."""
+        client.settings.add_paused = True
+        responses.post(f"{API}/auth/login", body="Ok.")
+        responses.post(f"{API}/torrents/add", body="Ok.")
+
+        client.add_magnet("magnet:?xt=urn:btih:" + "c" * 40)
+
+        body = responses.calls[-1].request.body
+        assert "paused=true" in body
+        assert "stopped=true" in body
+
+    @responses.activate
+    def test_already_added_is_not_an_error(self, client: QBittorrentClient) -> None:
+        """Повторная отправка той же раздачи даёт 409 — это «уже есть», не сбой."""
+        responses.post(f"{API}/auth/login", body="Ok.")
+        responses.post(f"{API}/torrents/add", status=409, body="")
+
+        result = client.add_magnet("magnet:?xt=urn:btih:" + "d" * 40)
+
+        assert result.ok is True
+        assert "уже есть" in result.message
+
+    @responses.activate
     def test_rejected_torrent(self, client: QBittorrentClient) -> None:
         responses.post(f"{API}/auth/login", body="Ok.")
         responses.post(f"{API}/torrents/add", body="Fails.")
@@ -250,6 +275,19 @@ class TestTorrentService:
 
         assert service.refresh_download_states() == 1
         assert repos.releases.get(target.id).state == ReleaseState.DOWNLOADED
+
+    def test_magnet_send_stores_hash(self, service, repos, client) -> None:
+        """У magnet хеш лежит в самой ссылке — качать файл ради него не нужно."""
+        target = repos.releases.feed()[0]
+        magnet_hash = "b" * 40
+        with repos.db.transaction() as conn:
+            conn.execute(
+                "UPDATE release SET magnet = ? WHERE id = ?",
+                (f"magnet:?xt=urn:btih:{magnet_hash.upper()}&dn=test", target.id),
+            )
+
+        assert service.send(repos.releases.get(target.id)) is True
+        assert repos.releases.get(target.id).info_hash == magnet_hash
 
     def test_magnet_absent_returns_false(self, service, repos) -> None:
         assert service.open_magnet(repos.releases.feed()[0]) is False

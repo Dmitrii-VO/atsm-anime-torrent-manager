@@ -57,7 +57,10 @@ class AnimeRepository:
         SELECT a.*,
                (SELECT COUNT(*) FROM release r
                  WHERE r.anime_id = a.id AND r.is_seen = 0 AND r.state = 'new') AS new_count,
-               (SELECT MAX(r.episode) FROM release r WHERE r.anime_id = a.id) AS last_episode
+               -- Для пачек «1-5» последней вышедшей считается конец диапазона,
+               -- иначе AniLibria показывала бы «до 1 серии».
+               (SELECT MAX(COALESCE(r.episode_end, r.episode)) FROM release r
+                 WHERE r.anime_id = a.id) AS last_episode
           FROM anime a
     """
 

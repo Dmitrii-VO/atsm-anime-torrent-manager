@@ -12,6 +12,9 @@ from loguru import logger
 from ..config import QBittorrentSettings
 from .base import AddResult, BaseTorrentClient, TorrentClientError
 
+# qBittorrent отвечает 409, если раздача с таким хешем уже добавлена.
+ALREADY_ADDED = 409
+
 
 class QBittorrentClient(BaseTorrentClient):
     name = "qbittorrent"
@@ -62,7 +65,9 @@ class QBittorrentClient(BaseTorrentClient):
         self._logged_in = True
         logger.debug("Вход в qBittorrent выполнен (ответ: {!r})", body or response.status_code)
 
-    def _request(self, method: str, path: str, **kwargs) -> requests.Response:
+    def _request(
+        self, method: str, path: str, allow: tuple[int, ...] = (), **kwargs
+    ) -> requests.Response:
         if not self._logged_in:
             self.login()
 
@@ -84,7 +89,7 @@ class QBittorrentClient(BaseTorrentClient):
                 f"Потеряна связь с qBittorrent ({self.settings.base_url})"
             ) from exc
 
-        if response.status_code >= 400:
+        if response.status_code >= 400 and response.status_code not in allow:
             raise TorrentClientError(f"qBittorrent вернул HTTP {response.status_code}")
         return response
 
@@ -99,6 +104,7 @@ class QBittorrentClient(BaseTorrentClient):
         response = self._request(
             "POST",
             "/torrents/add",
+            allow=(ALREADY_ADDED,),
             files={"torrents": (filename, data, "application/x-bittorrent")},
             data=self._add_options(),
         )
@@ -106,12 +112,19 @@ class QBittorrentClient(BaseTorrentClient):
 
     def add_magnet(self, magnet: str) -> AddResult:
         response = self._request(
-            "POST", "/torrents/add", data={"urls": magnet, **self._add_options()}
+            "POST",
+            "/torrents/add",
+            allow=(ALREADY_ADDED,),
+            data={"urls": magnet, **self._add_options()},
         )
         return self._interpret(response, magnet[:60])
 
     def _add_options(self) -> dict[str, str]:
-        options: dict[str, str] = {"paused": "true" if self.settings.add_paused else "false"}
+        # qBittorrent 5.x (Web API 2.11+) переименовал paused в stopped.
+        # Шлём оба ключа: незнакомый параметр клиент игнорирует, а иначе
+        # «добавлять на паузе» молча не срабатывает на новых версиях.
+        flag = "true" if self.settings.add_paused else "false"
+        options: dict[str, str] = {"paused": flag, "stopped": flag}
         if self.settings.category:
             options["category"] = self.settings.category
         if self.settings.save_path:
@@ -120,6 +133,10 @@ class QBittorrentClient(BaseTorrentClient):
 
     @staticmethod
     def _interpret(response: requests.Response, label: str) -> AddResult:
+        # Повторная отправка той же раздачи — не сбой: клиент уже её знает.
+        if response.status_code == ALREADY_ADDED:
+            return AddResult(ok=True, message="Раздача уже есть в торрент-клиенте")
+
         body = response.text.strip()
         # API отвечает "Ok." даже на уже существующую раздачу, "Fails." — на отказ.
         if body.lower().startswith("fail"):
