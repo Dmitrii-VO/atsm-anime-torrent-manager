@@ -12,3 +12,7 @@ dist/
 *.db
 *.db-wal
 *.db-shm
+
+# Obsidian: состояние интерфейса — у каждого своё
+vault/.obsidian/workspace*.json
+vault/.obsidian/plugins/
