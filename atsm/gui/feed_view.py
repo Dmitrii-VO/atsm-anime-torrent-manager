@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 
 from ..core.models import Release, ReleaseState
 from .models import RELEASE_ROLE, FeedModel
+from .palette import DARK, Palette
 
 CARD_HEIGHT = 76
 CARD_MARGIN = 6
@@ -29,6 +30,13 @@ class FeedDelegate(QStyledItemDelegate):
     """Карточка серии с кнопкой «Скачать» прямо в строке (макет из ТЗ §5)."""
 
     download_clicked = Signal(QModelIndex)
+
+    def __init__(self, parent=None, palette: Palette = DARK) -> None:
+        super().__init__(parent)
+        self.palette = palette
+
+    def set_palette(self, palette: Palette) -> None:
+        self.palette = palette
 
     def sizeHint(self, option, index) -> QSize:  # noqa: N802
         return QSize(option.rect.width(), CARD_HEIGHT + CARD_MARGIN)
@@ -45,18 +53,19 @@ class FeedDelegate(QStyledItemDelegate):
         hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
 
-        background = QColor("#242938")
+        colors = self.palette
+        background = QColor(colors.surface)
         if selected:
-            background = QColor("#2f3648")
+            background = QColor(colors.selection)
         elif hovered:
-            background = QColor("#2a3040")
+            background = QColor(colors.hover)
         painter.setBrush(background)
-        painter.setPen(QPen(QColor("#39405422"), 1))
+        painter.setPen(QPen(QColor(colors.border), 1))
         painter.drawRoundedRect(card, 10, 10)
 
         failed = release.state == ReleaseState.ERROR
         # Полоска слева: акцент на новинке, красный — на неудачной отправке.
-        painter.setBrush(QColor("#e5484d") if failed else QColor("#7c5cff"))
+        painter.setBrush(QColor(colors.danger) if failed else QColor(colors.accent))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(QRect(card.left(), card.top(), 4, card.height()), 2, 2)
 
@@ -67,7 +76,7 @@ class FeedDelegate(QStyledItemDelegate):
         title_font.setBold(True)
         title_font.setPointSize(option.font.pointSize() + 1)
         painter.setFont(title_font)
-        painter.setPen(QColor("#eceef4"))
+        painter.setPen(QColor(colors.text))
         painter.drawText(
             QRect(text_left, card.top() + 12, text_width, 22),
             int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
@@ -75,7 +84,7 @@ class FeedDelegate(QStyledItemDelegate):
         )
 
         painter.setFont(option.font)
-        painter.setPen(QColor("#e5484d") if failed else QColor("#98a2b8"))
+        painter.setPen(QColor(colors.danger) if failed else QColor(colors.text_muted))
         painter.drawText(
             QRect(text_left, card.top() + 38, text_width, 20),
             int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
@@ -98,12 +107,14 @@ class FeedDelegate(QStyledItemDelegate):
 
     def _paint_button(self, painter: QPainter, option, card: QRect, hovered: bool, failed: bool):
         rect = self._button_rect(card)
-        painter.setBrush(QColor("#6d4dff") if hovered else QColor("#5b3fe0"))
+        painter.setBrush(
+            QColor(self.palette.accent_hover if hovered else self.palette.accent)
+        )
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(rect, 8, 8)
 
         painter.setFont(option.font)
-        painter.setPen(QColor("#ffffff"))
+        painter.setPen(QColor(self.palette.accent_text))
         painter.drawText(rect, int(Qt.AlignmentFlag.AlignCenter), "Повторить" if failed else "Скачать")
 
     @staticmethod
@@ -136,10 +147,16 @@ class FeedView(QWidget):
     mark_seen_requested = Signal(object)
     open_anime_requested = Signal(object)
 
-    def __init__(self) -> None:
+    def __init__(self, palette: Palette = DARK) -> None:
         super().__init__()
         self.model = FeedModel()
+        self._palette = palette
         self._build()
+
+    def set_palette(self, palette: Palette) -> None:
+        self._palette = palette
+        self.delegate.set_palette(palette)
+        self.list.viewport().update()
 
     def _build(self) -> None:
         layout = QVBoxLayout(self)
@@ -178,7 +195,7 @@ class FeedView(QWidget):
         self.list.setUniformItemSizes(True)
         self.list.setFrameShape(QListView.Shape.NoFrame)
 
-        self.delegate = FeedDelegate(self.list)
+        self.delegate = FeedDelegate(self.list, self._palette)
         self.delegate.download_clicked.connect(self._on_button)
         self.list.setItemDelegate(self.delegate)
         self.list.doubleClicked.connect(self._on_double_click)

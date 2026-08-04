@@ -27,6 +27,8 @@ from PySide6.QtWidgets import (
 
 from ..config import Settings
 from ..logging_setup import log_buffer
+from ..services.autostart import is_autostart_enabled
+from .palette import THEME_LABELS
 from .models import HistoryTableModel
 from .workers import Worker
 
@@ -169,12 +171,19 @@ class SettingsDialog(QDialog):
         form.addRow("", self.minimize_to_tray)
 
         self.autostart = QCheckBox("Запускать вместе с Windows")
-        self.autostart.setChecked(self.settings.autostart)
+        # Реестр — источник правды: пользователь мог убрать запись мимо приложения.
+        self.autostart.setChecked(is_autostart_enabled() or self.settings.autostart)
         form.addRow("", self.autostart)
 
         self.notifications = QCheckBox("Показывать уведомления")
         self.notifications.setChecked(self.settings.notifications_enabled)
         form.addRow("", self.notifications)
+
+        self.theme = QComboBox()
+        for key, label in THEME_LABELS.items():
+            self.theme.addItem(label, key)
+        self.theme.setCurrentIndex(max(self.theme.findData(self.settings.theme), 0))
+        form.addRow("Тема оформления:", self.theme)
 
         self.log_level = QComboBox()
         self.log_level.addItems(["DEBUG", "INFO", "WARNING", "ERROR"])
@@ -287,6 +296,7 @@ class SettingsDialog(QDialog):
         self.settings.autostart = self.autostart.isChecked()
         self.settings.notifications_enabled = self.notifications.isChecked()
         self.settings.log_level = self.log_level.currentText()
+        self.settings.theme = self.theme.currentData()
 
         qbt = self.settings.qbittorrent
         qbt.host = self.host.text().strip()

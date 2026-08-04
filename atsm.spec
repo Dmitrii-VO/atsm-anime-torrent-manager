@@ -13,7 +13,7 @@ project = Path(SPECPATH)
 # Файлы, которые код читает с диска, а не импортирует.
 datas = [
     (str(project / "atsm" / "db" / "schema.sql"), "atsm/db"),
-    (str(project / "atsm" / "gui" / "theme.qss"), "atsm/gui"),
+    (str(project / "atsm" / "gui" / "theme.qss.tmpl"), "atsm/gui"),
 ]
 
 # Модули парсеров подгружаются реестром динамически, статический анализ их не видит.

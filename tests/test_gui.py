@@ -319,6 +319,155 @@ class TestAddDialog:
         assert "все зеркала молчат" in dialog.status.text()
 
 
+class TestSourceDiagnostics:
+    """ТЗ §21: пользователь должен понимать, почему новых серий нет."""
+
+    def test_states_are_shown(self, qtbot, seeded_ctx) -> None:
+        from atsm.core.models import SourceState
+
+        view = LibraryView()
+        qtbot.addWidget(view)
+        seeded_ctx.repos.sources.set("astar", SourceState.LAYOUT_CHANGED, "нет блоков раздач")
+        view.set_source_states(seeded_ctx.repos.sources.all())
+
+        assert "Изменена структура сайта" in view.sources_label.text()
+        assert "нет блоков раздач" in view.sources_label.toolTip()
+
+    def test_ok_state(self, qtbot, seeded_ctx) -> None:
+        from atsm.core.models import SourceState
+
+        view = LibraryView()
+        qtbot.addWidget(view)
+        seeded_ctx.repos.sources.set("astar", SourceState.OK)
+        view.set_source_states(seeded_ctx.repos.sources.all())
+        assert "Работает" in view.sources_label.text()
+
+    def test_no_checks_yet(self, qtbot) -> None:
+        view = LibraryView()
+        qtbot.addWidget(view)
+        view.set_source_states({})
+        assert "проверок ещё не было" in view.sources_label.text()
+
+    def test_main_window_publishes_states(self, qtbot, seeded_ctx) -> None:
+        from atsm.core.models import SourceState
+        from atsm.gui.main_window import MainWindow
+
+        seeded_ctx.repos.sources.set("fake", SourceState.UNREACHABLE, "сайт лёг")
+        window = MainWindow(seeded_ctx)
+        qtbot.addWidget(window)
+        assert "Недоступен" in window.library.sources_label.text()
+        window.scheduler.shutdown()
+
+
+class TestFiltersAndActions:
+    def test_source_filter(self, qtbot, seeded_ctx) -> None:
+        view = LibraryView()
+        qtbot.addWidget(view)
+        view.set_anime(seeded_ctx.repos.anime.list())
+
+        assert view.source_box.count() == 2  # «Все источники» + fake
+        view.source_box.setCurrentIndex(1)
+        assert view.anime_model.rowCount() == 1
+
+    def test_autodownload_filter(self, qtbot, seeded_ctx) -> None:
+        view = LibraryView()
+        qtbot.addWidget(view)
+        view.set_anime(seeded_ctx.repos.anime.list())
+
+        view.filter_box.setCurrentIndex(4)
+        assert view.anime_model.rowCount() == 0
+
+        seeded_ctx.repos.anime.set_flag(seeded_ctx.repos.anime.list()[0].id, "auto_download", True)
+        view.set_anime(seeded_ctx.repos.anime.list())
+        assert view.anime_model.rowCount() == 1
+
+    def test_return_to_new(self, qtbot, seeded_ctx) -> None:
+        from atsm.core.models import ReleaseState
+        from atsm.gui.main_window import MainWindow
+
+        repos = seeded_ctx.repos
+        repos.releases.mark_all_seen()
+        window = MainWindow(seeded_ctx)
+        qtbot.addWidget(window)
+        assert window.feed.model.rowCount() == 0
+
+        anime = repos.anime.list()[0]
+        target = repos.releases.list_for_anime(anime.id)[0]
+        window.return_to_new(target)
+
+        assert repos.releases.get(target.id).is_seen is False
+        assert repos.releases.get(target.id).state == ReleaseState.NEW
+        assert window.feed.model.rowCount() == 1
+        window.scheduler.shutdown()
+
+
+class TestDownloadStates:
+    """ТЗ §13: статус «скачана» подтягивается из клиента после проверки."""
+
+    def test_states_applied_after_check(self, qtbot, seeded_ctx) -> None:
+        from atsm.core.models import ReleaseState
+        from atsm.gui.main_window import MainWindow
+
+        repos = seeded_ctx.repos
+        window = MainWindow(seeded_ctx)
+        qtbot.addWidget(window)
+
+        anime = repos.anime.list()[0]
+        target = repos.releases.list_for_anime(anime.id)[0]
+        repos.releases.set_state(target.id, ReleaseState.SENT, "отправлено")
+        repos.releases.set_info_hash(target.id, "abc123")
+
+        class DoneClient:
+            def torrent_states(self, hashes):
+                return {"abc123": "stalledUP"}
+
+        window.torrents.client = DoneClient()
+        window._refresh_download_states()
+        qtbot.waitUntil(
+            lambda: repos.releases.get(target.id).state == ReleaseState.DOWNLOADED, timeout=3000
+        )
+        window.scheduler.shutdown()
+
+
+class TestTheme:
+    def test_both_palettes_render_fully(self) -> None:
+        from atsm.gui.palette import PALETTES, stylesheet
+
+        for name, palette in PALETTES.items():
+            css = stylesheet(palette)
+            assert "$" not in css, f"в теме {name} осталась неподставленная переменная"
+            assert palette.accent in css
+
+    def test_switching_theme_updates_delegates(self, qtbot, seeded_ctx) -> None:
+        from atsm.gui.main_window import MainWindow
+        from atsm.gui.palette import LIGHT
+
+        window = MainWindow(seeded_ctx)
+        qtbot.addWidget(window)
+        assert window.feed.delegate.palette.name == "dark"
+
+        seeded_ctx.settings.theme = "light"
+        window._apply_theme()
+
+        assert window.feed.delegate.palette is LIGHT
+        assert window.library.anime_list.itemDelegate().palette is LIGHT
+        window.scheduler.shutdown()
+
+    def test_delegates_paint_in_light_theme(self, qtbot, seeded_ctx) -> None:
+        from atsm.gui.palette import LIGHT
+
+        view = FeedView(LIGHT)
+        qtbot.addWidget(view)
+        view.set_releases(seeded_ctx.repos.releases.feed())
+
+        pixmap = QPixmap(900, 90)
+        painter = QPainter(pixmap)
+        option = QStyleOptionViewItem()
+        option.rect = QRect(0, 0, 900, 82)
+        view.delegate.paint(painter, option, view.model.index(0, 0))
+        painter.end()
+
+
 class TestTrayAndIcons:
     def test_badge_icon_renders(self) -> None:
         assert not app_icon().isNull()

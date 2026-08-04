@@ -9,6 +9,7 @@ from PySide6.QtCore import QThreadPool, QTimer, Qt, Signal
 from PySide6.QtGui import QDesktopServices, QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import (
+    QApplication,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -24,7 +25,7 @@ from PySide6.QtWidgets import (
 
 from ..app import AppContext
 from ..config import save_settings
-from ..core.models import Anime, Release
+from ..core.models import Anime, Release, ReleaseState
 from ..core.subscription_service import SubscriptionExists, SubscriptionService
 from ..core.torrent_service import TorrentService
 from ..core.update_service import CheckSummary, UpdateService
@@ -36,6 +37,7 @@ from .dialogs import AddSubscriptionDialog, LogDialog, SettingsDialog, confirm
 from .feed_view import FeedView
 from .icons import app_icon
 from .library_view import LibraryView
+from .palette import palette_for, stylesheet
 from .tray import Tray
 from .widgets import ElidedLabel
 from .workers import Worker
@@ -60,6 +62,7 @@ class MainWindow(QMainWindow):
         self.updates = UpdateService(self.repos, self.registry, self.torrents)
         self.subscriptions = SubscriptionService(self.repos, self.registry, ctx.paths.posters)
 
+        self.palette_colors = palette_for(ctx.settings.theme)
         self._build_ui()
         self._build_tray()
         self._connect()
@@ -103,8 +106,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(toolbar)
 
         self.tabs = QTabWidget()
-        self.feed = FeedView()
-        self.library = LibraryView()
+        self.feed = FeedView(self.palette_colors)
+        self.library = LibraryView(self.palette_colors)
         self.tabs.addTab(self.feed, "Лента")
         self.tabs.addTab(self.library, "Библиотека")
         layout.addWidget(self.tabs, 1)
@@ -161,6 +164,8 @@ class MainWindow(QMainWindow):
         self.library.auto_download_toggled.connect(self.set_auto_download)
         self.library.favorite_toggled.connect(self.set_favorite)
         self.library.open_page_requested.connect(self.open_page)
+        self.library.unseen_requested.connect(self.return_to_new)
+        self.library.open_magnet_requested.connect(self.open_magnet)
         self.library.anime_list.selectionModel().currentChanged.connect(
             lambda *_: self._refresh_releases()
         )
@@ -181,6 +186,7 @@ class MainWindow(QMainWindow):
 
     def refresh_all(self) -> None:
         self.library.set_anime(self.repos.anime.list())
+        self.library.set_source_states(self.repos.sources.all())
         self._refresh_feed()
         self._refresh_releases()
 
@@ -317,6 +323,22 @@ class MainWindow(QMainWindow):
         if summary.new_count and self.ctx.settings.notifications_enabled:
             self._notify_new(summary)
 
+        self._refresh_download_states()
+
+    def _refresh_download_states(self) -> None:
+        """Спрашивает у клиента, что уже скачано (ТЗ §13). Тихо и в фоне."""
+        worker = Worker(self.torrents.refresh_download_states)
+        worker.signals.finished.connect(self._on_download_states)
+        worker.signals.failed.connect(
+            lambda exc: logger.debug("Статусы раздач не обновлены: {}", exc)
+        )
+        self.pool.start(worker)
+
+    def _on_download_states(self, updated: int) -> None:
+        if updated:
+            logger.info("Отмечено скачанными раздач: {}", updated)
+            self.refresh_all()
+
     def _notify_new(self, summary: CheckSummary) -> None:
         titles = [
             f"{result.anime.title} — {result.new_releases[0].episode_label}"
@@ -395,6 +417,15 @@ class MainWindow(QMainWindow):
             busy_message="Открываем в торрент-клиенте…",
         )
 
+    def return_to_new(self, release: Release) -> None:
+        self.repos.releases.set_state(release.id, ReleaseState.NEW, None, seen=False)
+        self.refresh_all()
+        self.status_label.setText(f"{release.episode_label} снова в ленте")
+
+    def open_magnet(self, release: Release) -> None:
+        if not self.torrents.open_magnet(release):
+            self.status_label.setText("У этой раздачи нет magnet-ссылки")
+
     def mark_seen(self, anime_id: int | None) -> None:
         self.repos.releases.mark_all_seen(anime_id)
         self.refresh_all()
@@ -419,11 +450,20 @@ class MainWindow(QMainWindow):
         self.torrent_client = self._make_client()
         self.torrents.client = self.torrent_client
         self.scheduler.reschedule(self.ctx.settings.check_interval_minutes)
+        self._apply_theme()
         self._apply_autostart()
         self.status_label.setText("Настройки сохранены")
 
     def open_log(self) -> None:
         LogDialog(self.repos, self).exec()
+
+    def _apply_theme(self) -> None:
+        self.palette_colors = palette_for(self.ctx.settings.theme)
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(stylesheet(self.palette_colors))
+        self.feed.set_palette(self.palette_colors)
+        self.library.set_palette(self.palette_colors)
 
     def _apply_autostart(self) -> None:
         from ..services.autostart import set_autostart
