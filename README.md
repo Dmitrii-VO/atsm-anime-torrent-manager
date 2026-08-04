@@ -36,7 +36,7 @@ pip install pyinstaller
 python tools/make_icon.py && pyinstaller atsm.spec --noconfirm
 ```
 
-Готовое приложение — `dist/ATSM/ATSM.exe` (около 87 МБ вместе с Qt). Папку `dist/ATSM`
+Готовое приложение — `dist/ATSM/ATSM.exe` (около 155 МБ вместе с Qt). Папку `dist/ATSM`
 можно целиком перенести на другую машину, Python там не нужен. Иконка не хранится в
 репозитории: `tools/make_icon.py` рисует её кодом перед сборкой.
 

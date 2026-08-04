@@ -32,6 +32,15 @@ excludes = [
     "pytest",
     "numpy",
     "matplotlib",
+    # APScheduler умеет хранить задания в БД, и хуки тянут SQLAlchemy с
+    # драйверами PostgreSQL. Планировщик у нас только в памяти.
+    "sqlalchemy",
+    "psycopg",
+    "psycopg2",
+    "pymysql",
+    "MySQLdb",
+    "PIL",
+    "zstandard",
     "PySide6.QtQml",
     "PySide6.QtQuick",
     "PySide6.QtQuick3D",
