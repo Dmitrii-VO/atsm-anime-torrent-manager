@@ -194,7 +194,18 @@ class TestLibraryView:
         assert model.rowCount() == 3
         assert model.data(model.index(0, 0)) == "Серия 3"
         assert model.data(model.index(0, 1)).endswith("МБ")
-        assert "не просмотрено" in model.data(model.index(0, 4))
+
+    def test_archive_is_not_labelled_new(self, qtbot, seeded_ctx) -> None:
+        """Импортированный архив не должен выглядеть как двести новых серий."""
+        view = LibraryView()
+        qtbot.addWidget(view)
+        anime = seeded_ctx.repos.anime.list()[0]
+        view.set_releases(seeded_ctx.repos.releases.list_for_anime(anime.id))
+
+        model = view.release_model
+        statuses = [model.data(model.index(row, 4)) for row in range(model.rowCount())]
+        assert statuses[0] == "Новая"          # вышла после подписки
+        assert statuses[1:] == ["В архиве", "В архиве"]
 
 
 class TestModels:
@@ -273,6 +284,39 @@ class TestStatusBar:
         total = sum(table.columnWidth(c) for c in range(table.model().columnCount()))
         assert total <= table.viewport().width() + 2
         window.scheduler.shutdown()
+
+
+class TestAddDialog:
+    def test_preview_shows_title_and_count(self, qtbot, seeded_ctx) -> None:
+        from atsm.core.subscription_service import SubscriptionService
+        from atsm.gui.dialogs import AddSubscriptionDialog
+
+        parser = FakeParser([release("1", 1), release("2", 2)])
+        service = SubscriptionService(seeded_ctx.repos, FakeRegistry(parser))
+        dialog = AddSubscriptionDialog(service, None)
+        qtbot.addWidget(dialog)
+
+        dialog.url_edit.setText("https://example.test/555-new.html")
+        dialog._preview()
+        qtbot.waitUntil(lambda: "раздач" in dialog.status.text(), timeout=3000)
+        assert "Пожиратель звёзд" in dialog.status.text()
+
+    def test_error_is_shown_to_user(self, qtbot, seeded_ctx) -> None:
+        """Сигнал об ошибке несёт исключение — текст всё равно должен дойти."""
+        from atsm.core.subscription_service import SubscriptionService
+        from atsm.gui.dialogs import AddSubscriptionDialog
+        from atsm.parsers.base import SourceUnreachable
+
+        parser = FakeParser([])
+        parser.fail_with(SourceUnreachable("все зеркала молчат"))
+        service = SubscriptionService(seeded_ctx.repos, FakeRegistry(parser))
+        dialog = AddSubscriptionDialog(service, None)
+        qtbot.addWidget(dialog)
+
+        dialog.url_edit.setText("https://example.test/555-new.html")
+        dialog._preview()
+        qtbot.waitUntil(lambda: "Ошибка" in dialog.status.text(), timeout=3000)
+        assert "все зеркала молчат" in dialog.status.text()
 
 
 class TestTrayAndIcons:

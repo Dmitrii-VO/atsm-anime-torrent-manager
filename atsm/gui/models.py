@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QAbstractListModel, QAbstractTableModel, QModelIndex, Qt
 
-from ..core.models import Anime, HistoryEntry, Release, ReleaseState
+from ..core.models import Anime, HistoryEntry, Release, ReleaseState  # noqa: F401
 
 RELEASE_ROLE = Qt.ItemDataRole.UserRole + 1
 ANIME_ROLE = Qt.ItemDataRole.UserRole + 2
@@ -20,6 +20,16 @@ STATE_LABELS = {
     ReleaseState.ERROR: "Ошибка",
     ReleaseState.IGNORED: "Пропущена",
 }
+
+
+def _state_label(release: Release) -> str:
+    """Архивные раздачи не «новые»: у них состояние new, но они уже просмотрены.
+
+    Иначе весь импортированный архив выглядит как двести новых серий.
+    """
+    if release.state == ReleaseState.NEW:
+        return "Новая" if not release.is_seen else "В архиве"
+    return STATE_LABELS.get(release.state, release.state)
 
 
 class FeedModel(QAbstractListModel):
@@ -152,8 +162,7 @@ class ReleaseTableModel(QAbstractTableModel):
             case 3:
                 return "—" if release.seeders is None else str(release.seeders)
             case 4:
-                label = STATE_LABELS.get(release.state, release.state)
-                return f"{label} • не просмотрено" if not release.is_seen else label
+                return _state_label(release)
         return None
 
     def set_items(self, items: list[Release]) -> None:

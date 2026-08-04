@@ -30,6 +30,7 @@ from ..core.torrent_service import TorrentService
 from ..core.update_service import CheckSummary, UpdateService
 from ..parsers import ParserRegistry
 from ..services.scheduler import CheckScheduler
+from ..torrent.base import TorrentClientError
 from ..torrent.qbittorrent import QBittorrentClient
 from .dialogs import AddSubscriptionDialog, LogDialog, SettingsDialog, confirm
 from .feed_view import FeedView
@@ -212,9 +213,33 @@ class MainWindow(QMainWindow):
         worker.signals.failed.connect(self._on_failure)
         self.pool.start(worker)
 
-    def _on_failure(self, message: str) -> None:
+    def _on_failure(self, exc: Exception) -> None:
+        message = str(exc)
         self._set_busy(False, f"Ошибка: {message}")
         logger.error("Операция не удалась: {}", message)
+
+        # Ненастроенный торрент-клиент — самая частая причина, и одной строки
+        # в статусе мало: подсказываем, что делать, и ведём в настройки.
+        if isinstance(exc, TorrentClientError):
+            self._offer_client_setup(message)
+
+    def _offer_client_setup(self, message: str) -> None:
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Торрент-клиент недоступен")
+        box.setText(message)
+        box.setInformativeText(
+            "Раздачу можно сохранить в файл через меню правой кнопкой — «Скачать "
+            "torrent-файл…» — и открыть её вручную.\n\n"
+            "Чтобы отправлять раздачи автоматически, установите qBittorrent, включите "
+            "в нём «Веб-интерфейс» и укажите адрес, логин и пароль в настройках."
+        )
+        open_settings = box.addButton("Открыть настройки", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Закрыть", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+
+        if box.clickedButton() is open_settings:
+            self.open_settings()
 
     # --- подписки ---------------------------------------------------------
 

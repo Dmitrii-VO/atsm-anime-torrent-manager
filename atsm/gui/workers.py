@@ -14,7 +14,9 @@ from PySide6.QtCore import QObject, QRunnable, Signal, Slot
 
 class WorkerSignals(QObject):
     finished = Signal(object)
-    failed = Signal(str)
+    # Передаётся само исключение, а не текст: обработчику важен его тип,
+    # чтобы отличить недоступный торрент-клиент от ошибки разбора страницы.
+    failed = Signal(object)
     progress = Signal(str)
 
 
@@ -35,6 +37,6 @@ class Worker(QRunnable):
             result = self.fn(*self.args, **self.kwargs)
         except Exception as exc:  # noqa: BLE001 — иначе исключение утонет в пуле
             logger.exception("Фоновая задача завершилась ошибкой")
-            self.signals.failed.emit(str(exc))
+            self.signals.failed.emit(exc)
         else:
             self.signals.finished.emit(result)
