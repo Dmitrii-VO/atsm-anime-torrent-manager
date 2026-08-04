@@ -14,6 +14,7 @@ from loguru import logger
 from . import __version__
 from .config import Paths, Settings, load_settings, paths, save_settings
 from .db import Database
+from .db.repositories import Repositories
 from .logging_setup import setup_logging
 
 
@@ -22,6 +23,7 @@ class AppContext:
     paths: Paths
     settings: Settings
     db: Database
+    repos: "Repositories"
 
     def save_settings(self) -> None:
         save_settings(self.settings, self.paths.settings)
@@ -53,4 +55,4 @@ def bootstrap(data_dir: Path | None = None, console_log: bool = True) -> AppCont
     db = Database(app_paths.db)
     db.migrate()
 
-    return AppContext(paths=app_paths, settings=settings, db=db)
+    return AppContext(paths=app_paths, settings=settings, db=db, repos=Repositories(db))

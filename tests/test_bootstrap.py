@@ -34,5 +34,6 @@ def test_bootstrap_is_repeatable(tmp_path: Path) -> None:
 
 
 def test_main_entry_point(tmp_path: Path) -> None:
-    assert main(["--data-dir", str(tmp_path / "cli")]) == 0
+    """Без --no-gui точка входа поднимает интерфейс и не возвращает управление."""
+    assert main(["--data-dir", str(tmp_path / "cli"), "--no-gui"]) == 0
     assert (tmp_path / "cli" / "atsm.db").exists()

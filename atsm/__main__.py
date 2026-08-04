@@ -1,4 +1,4 @@
-"""Точка входа. Пока поднимает ядро без GUI (GUI появится на этапе 6)."""
+"""Точка входа приложения."""
 
 from __future__ import annotations
 
@@ -14,7 +14,12 @@ from .app import bootstrap
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="atsm", description="Anime Torrent Subscription Manager")
-    parser.add_argument("--data-dir", type=Path, help="каталог данных (по умолчанию %%APPDATA%%\\ATSM)")
+    parser.add_argument(
+        "--data-dir", type=Path, help="каталог данных (по умолчанию %%APPDATA%%\\ATSM)"
+    )
+    parser.add_argument(
+        "--no-gui", action="store_true", help="только инициализация ядра, без интерфейса"
+    )
     parser.add_argument("--version", action="version", version=f"ATSM {__version__}")
     args = parser.parse_args(argv)
 
@@ -24,14 +29,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Не удалось запустить приложение: {exc}", file=sys.stderr)
         return 1
 
-    logger.info("Каталог данных: {}", ctx.paths.root)
-    logger.info("База данных: {}", ctx.paths.db)
-    logger.info("Таблицы: {}", ", ".join(ctx.db.table_names()))
-    logger.info("Интервал проверки: {} мин", ctx.settings.check_interval_minutes)
-    logger.info("Источник astar: {}", ctx.settings.sources.astar_host)
+    if args.no_gui:
+        logger.info("Каталог данных: {}", ctx.paths.root)
+        logger.info("Таблицы: {}", ", ".join(ctx.db.table_names()))
+        logger.info("Подписок: {}", len(ctx.repos.anime.list()))
+        logger.info("Новых серий: {}", ctx.repos.releases.feed_count())
+        ctx.shutdown()
+        return 0
 
-    ctx.shutdown()
-    return 0
+    from .gui.application import run_gui
+
+    return run_gui(ctx)
 
 
 if __name__ == "__main__":

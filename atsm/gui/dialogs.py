@@ -1,0 +1,368 @@
+"""Диалоги: добавление подписки, настройки, журнал (ТЗ §3, §22, §23)."""
+
+from __future__ import annotations
+
+from PySide6.QtCore import Qt, QThreadPool, Signal
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFileDialog,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPlainTextEdit,
+    QPushButton,
+    QSpinBox,
+    QTableView,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
+
+from ..config import Settings
+from ..logging_setup import log_buffer
+from .models import HistoryTableModel
+from .workers import Worker
+
+
+class AddSubscriptionDialog(QDialog):
+    """Добавление по ссылке с предварительной проверкой (ТЗ §3, способ 1)."""
+
+    def __init__(self, subscriptions, parent=None) -> None:
+        super().__init__(parent)
+        self.subscriptions = subscriptions
+        self.pool = QThreadPool.globalInstance()
+        self.result_info = None
+
+        self.setWindowTitle("Добавить подписку")
+        self.setMinimumWidth(560)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+
+        layout.addWidget(QLabel("Ссылка на страницу аниме:"))
+        self.url_edit = QLineEdit()
+        self.url_edit.setPlaceholderText("https://v30.astar.bz/7788-pozhiratel-zvezd.html")
+        self.url_edit.textChanged.connect(self._reset_preview)
+        layout.addWidget(self.url_edit)
+
+        self.auto_check = QCheckBox("Скачивать новые серии автоматически")
+        layout.addWidget(self.auto_check)
+
+        self.status = QLabel("")
+        self.status.setObjectName("muted")
+        self.status.setWordWrap(True)
+        layout.addWidget(self.status)
+
+        buttons = QHBoxLayout()
+        self.check_button = QPushButton("Проверить ссылку")
+        self.check_button.setObjectName("secondaryButton")
+        self.check_button.clicked.connect(self._preview)
+        buttons.addWidget(self.check_button)
+        buttons.addStretch(1)
+
+        self.box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        self.box.button(QDialogButtonBox.StandardButton.Ok).setText("Добавить")
+        self.box.accepted.connect(self._add)
+        self.box.rejected.connect(self.reject)
+        buttons.addWidget(self.box)
+        layout.addLayout(buttons)
+
+    def url(self) -> str:
+        return self.url_edit.text().strip()
+
+    def auto_download(self) -> bool:
+        return self.auto_check.isChecked()
+
+    def _reset_preview(self) -> None:
+        self.status.setText("")
+
+    def _busy(self, busy: bool, message: str = "") -> None:
+        self.check_button.setEnabled(not busy)
+        self.box.button(QDialogButtonBox.StandardButton.Ok).setEnabled(not busy)
+        if message:
+            self.status.setText(message)
+
+    def _preview(self) -> None:
+        if not self.url():
+            self.status.setText("Введите ссылку")
+            return
+        self._busy(True, "Загружаем страницу…")
+
+        worker = Worker(self.subscriptions.preview, self.url())
+        worker.signals.finished.connect(self._preview_done)
+        worker.signals.failed.connect(lambda msg: self._busy(False, f"Ошибка: {msg}"))
+        self.pool.start(worker)
+
+    def _preview_done(self, info) -> None:
+        self._busy(False)
+        latest = info.releases[0] if info.releases else None
+        latest_text = f", последняя — {latest.episode_raw}" if latest else ""
+        self.status.setText(f"«{info.title}»: раздач {len(info.releases)}{latest_text}")
+
+    def _add(self) -> None:
+        if not self.url():
+            self.status.setText("Введите ссылку")
+            return
+        self._busy(True, "Добавляем подписку…")
+
+        worker = Worker(self.subscriptions.add, self.url(), auto_download=self.auto_download())
+        worker.signals.finished.connect(self._added)
+        worker.signals.failed.connect(lambda msg: self._busy(False, f"Ошибка: {msg}"))
+        self.pool.start(worker)
+
+    def _added(self, anime) -> None:
+        self.result_info = anime
+        self.accept()
+
+
+class SettingsDialog(QDialog):
+    """Настройки приложения (ТЗ §23)."""
+
+    def __init__(self, settings: Settings, torrent_client_factory, parent=None) -> None:
+        super().__init__(parent)
+        self.settings = settings
+        self.torrent_client_factory = torrent_client_factory
+        self.pool = QThreadPool.globalInstance()
+
+        self.setWindowTitle("Настройки")
+        self.setMinimumWidth(520)
+
+        layout = QVBoxLayout(self)
+        tabs = QTabWidget()
+        tabs.addTab(self._general_tab(), "Общие")
+        tabs.addTab(self._client_tab(), "Торрент-клиент")
+        tabs.addTab(self._sources_tab(), "Источники")
+        layout.addWidget(tabs)
+
+        box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        )
+        box.accepted.connect(self._save)
+        box.rejected.connect(self.reject)
+        layout.addWidget(box)
+
+    def _general_tab(self) -> QWidget:
+        page = QWidget()
+        form = QFormLayout(page)
+
+        self.interval = QSpinBox()
+        self.interval.setRange(5, 24 * 60)
+        self.interval.setSuffix(" мин")
+        self.interval.setValue(self.settings.check_interval_minutes)
+        form.addRow("Интервал проверки:", self.interval)
+
+        self.check_on_startup = QCheckBox("Проверять при запуске")
+        self.check_on_startup.setChecked(self.settings.check_on_startup)
+        form.addRow("", self.check_on_startup)
+
+        self.minimize_to_tray = QCheckBox("Сворачивать в трей вместо выхода")
+        self.minimize_to_tray.setChecked(self.settings.minimize_to_tray)
+        form.addRow("", self.minimize_to_tray)
+
+        self.autostart = QCheckBox("Запускать вместе с Windows")
+        self.autostart.setChecked(self.settings.autostart)
+        form.addRow("", self.autostart)
+
+        self.notifications = QCheckBox("Показывать уведомления")
+        self.notifications.setChecked(self.settings.notifications_enabled)
+        form.addRow("", self.notifications)
+
+        self.log_level = QComboBox()
+        self.log_level.addItems(["DEBUG", "INFO", "WARNING", "ERROR"])
+        self.log_level.setCurrentText(self.settings.log_level)
+        form.addRow("Уровень журнала:", self.log_level)
+        return page
+
+    def _client_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        group = QGroupBox("qBittorrent Web API")
+        form = QFormLayout(group)
+        qbt = self.settings.qbittorrent
+
+        self.host = QLineEdit(qbt.host)
+        form.addRow("Адрес:", self.host)
+
+        self.port = QSpinBox()
+        self.port.setRange(1, 65535)
+        self.port.setValue(qbt.port)
+        form.addRow("Порт:", self.port)
+
+        self.https = QCheckBox("HTTPS")
+        self.https.setChecked(qbt.use_https)
+        form.addRow("", self.https)
+
+        self.username = QLineEdit(qbt.username)
+        form.addRow("Логин:", self.username)
+
+        self.password = QLineEdit(qbt.password)
+        self.password.setEchoMode(QLineEdit.EchoMode.Password)
+        form.addRow("Пароль:", self.password)
+
+        self.category = QLineEdit(qbt.category)
+        form.addRow("Категория:", self.category)
+
+        path_row = QHBoxLayout()
+        self.save_path = QLineEdit(qbt.save_path)
+        self.save_path.setPlaceholderText("по умолчанию в настройках клиента")
+        path_row.addWidget(self.save_path)
+        browse = QPushButton("Обзор…")
+        browse.clicked.connect(self._pick_folder)
+        path_row.addWidget(browse)
+        form.addRow("Папка загрузки:", path_row)
+
+        self.add_paused = QCheckBox("Добавлять на паузе")
+        self.add_paused.setChecked(qbt.add_paused)
+        form.addRow("", self.add_paused)
+        layout.addWidget(group)
+
+        test_row = QHBoxLayout()
+        self.test_button = QPushButton("Проверить соединение")
+        self.test_button.clicked.connect(self._test_connection)
+        test_row.addWidget(self.test_button)
+        self.test_result = QLabel("")
+        self.test_result.setObjectName("muted")
+        test_row.addWidget(self.test_result, 1)
+        layout.addLayout(test_row)
+        layout.addStretch(1)
+        return page
+
+    def _sources_tab(self) -> QWidget:
+        page = QWidget()
+        form = QFormLayout(page)
+
+        self.astar_host = QLineEdit(self.settings.sources.astar_host)
+        form.addRow("Текущее зеркало astar:", self.astar_host)
+
+        self.mirrors = QPlainTextEdit("\n".join(self.settings.sources.astar_mirrors))
+        self.mirrors.setPlaceholderText("по одному домену в строке")
+        self.mirrors.setMaximumHeight(160)
+        form.addRow("Список зеркал:", self.mirrors)
+
+        hint = QLabel(
+            "Домен astar периодически меняется. Приложение само переберёт зеркала "
+            "и запомнит рабочее."
+        )
+        hint.setObjectName("muted")
+        hint.setWordWrap(True)
+        form.addRow("", hint)
+        return page
+
+    def _pick_folder(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, "Папка загрузки", self.save_path.text())
+        if folder:
+            self.save_path.setText(folder)
+
+    def _test_connection(self) -> None:
+        self.test_button.setEnabled(False)
+        self.test_result.setText("Проверяем…")
+        self._apply_to_settings()
+
+        client = self.torrent_client_factory()
+        worker = Worker(client.test_connection)
+        worker.signals.finished.connect(
+            lambda version: self._test_done(f"qBittorrent {version} — соединение есть")
+        )
+        worker.signals.failed.connect(lambda msg: self._test_done(f"Ошибка: {msg}"))
+        self.pool.start(worker)
+
+    def _test_done(self, message: str) -> None:
+        self.test_button.setEnabled(True)
+        self.test_result.setText(message)
+
+    def _apply_to_settings(self) -> None:
+        self.settings.check_interval_minutes = self.interval.value()
+        self.settings.check_on_startup = self.check_on_startup.isChecked()
+        self.settings.minimize_to_tray = self.minimize_to_tray.isChecked()
+        self.settings.autostart = self.autostart.isChecked()
+        self.settings.notifications_enabled = self.notifications.isChecked()
+        self.settings.log_level = self.log_level.currentText()
+
+        qbt = self.settings.qbittorrent
+        qbt.host = self.host.text().strip()
+        qbt.port = self.port.value()
+        qbt.use_https = self.https.isChecked()
+        qbt.username = self.username.text().strip()
+        qbt.password = self.password.text()
+        qbt.category = self.category.text().strip()
+        qbt.save_path = self.save_path.text().strip()
+        qbt.add_paused = self.add_paused.isChecked()
+
+        self.settings.sources.astar_host = self.astar_host.text().strip()
+        mirrors = [line.strip() for line in self.mirrors.toPlainText().splitlines() if line.strip()]
+        if mirrors:
+            self.settings.sources.astar_mirrors = mirrors
+
+    def _save(self) -> None:
+        self._apply_to_settings()
+        self.accept()
+
+
+class LogDialog(QDialog):
+    """Журнал: история действий и последние записи лога (ТЗ §22)."""
+
+    def __init__(self, repos, parent=None) -> None:
+        super().__init__(parent)
+        self.repos = repos
+        self.setWindowTitle("Журнал")
+        self.resize(900, 560)
+
+        layout = QVBoxLayout(self)
+        tabs = QTabWidget()
+
+        self.history_model = HistoryTableModel()
+        table = QTableView()
+        table.setModel(self.history_model)
+        table.verticalHeader().setVisible(False)
+        table.setShowGrid(False)
+        table.setAlternatingRowColors(True)
+        table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        tabs.addTab(table, "История")
+
+        self.log_text = QPlainTextEdit()
+        self.log_text.setReadOnly(True)
+        self.log_text.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        tabs.addTab(self.log_text, "Лог приложения")
+        layout.addWidget(tabs)
+
+        buttons = QHBoxLayout()
+        refresh = QPushButton("Обновить")
+        refresh.clicked.connect(self.refresh)
+        buttons.addWidget(refresh)
+        buttons.addStretch(1)
+        close = QPushButton("Закрыть")
+        close.clicked.connect(self.accept)
+        buttons.addWidget(close)
+        layout.addLayout(buttons)
+
+        self.refresh()
+
+    def refresh(self) -> None:
+        self.history_model.set_items(self.repos.history.recent(300))
+        lines = [
+            f"{record.time:%d.%m %H:%M:%S} | {record.level:<7} | {record.message}"
+            for record in log_buffer.records()
+        ]
+        self.log_text.setPlainText("\n".join(lines[-800:]))
+        self.log_text.verticalScrollBar().setValue(self.log_text.verticalScrollBar().maximum())
+
+
+def confirm(parent, title: str, text: str) -> bool:
+    answer = QMessageBox.question(
+        parent,
+        title,
+        text,
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        QMessageBox.StandardButton.No,
+    )
+    return answer == QMessageBox.StandardButton.Yes
