@@ -17,7 +17,7 @@ from typing import Iterator
 
 from loguru import logger
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def _load_initial_schema() -> str:
@@ -27,11 +27,37 @@ def _load_initial_schema() -> str:
 # Сборники вида «Серии 27-28»: начало диапазона в episode, конец здесь.
 _MIGRATION_002 = "ALTER TABLE release ADD COLUMN episode_end INTEGER;"
 
+# Справочные данные из Shikimori/AniList. Отдельная таблица, а не колонки в
+# anime: это внешние данные, они обновляются независимо и могут отсутствовать.
+_MIGRATION_003 = """
+CREATE TABLE IF NOT EXISTS anime_metadata (
+    anime_id            INTEGER PRIMARY KEY REFERENCES anime(id) ON DELETE CASCADE,
+    shikimori_id        TEXT,
+    anilist_id          TEXT,
+    title_ru            TEXT,
+    title_romaji        TEXT,
+    title_native        TEXT,
+    kind                TEXT,
+    status              TEXT,
+    score               REAL,
+    episodes_total      INTEGER,   -- нумерация справочника, НЕ совпадает с трекером
+    episodes_aired      INTEGER,
+    next_episode_number INTEGER,
+    next_episode_at     TEXT,
+    poster_url          TEXT,
+    genres              TEXT,      -- через запятую
+    description         TEXT,
+    site_url            TEXT,
+    updated_at          TEXT NOT NULL
+);
+"""
+
 # Миграции применяются по порядку; версия N приводит схему к состоянию N.
 # Новая версия — новая запись здесь, ничего существующего не меняем.
 MIGRATIONS: dict[int, callable] = {
     1: _load_initial_schema,
     2: lambda: _MIGRATION_002,
+    3: lambda: _MIGRATION_003,
 }
 
 

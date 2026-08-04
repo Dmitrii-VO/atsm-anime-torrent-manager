@@ -136,6 +136,8 @@ class LibraryView(QWidget):
 
     unseen_requested = Signal(object)         # Release — вернуть в новые
     open_magnet_requested = Signal(object)
+    metadata_refresh_requested = Signal(object)   # Anime — обновить справку
+    metadata_rebind_requested = Signal(object)    # Anime — выбрать другой тайтл
 
     def __init__(self, palette: Palette = DARK) -> None:
         super().__init__()
@@ -235,6 +237,31 @@ class LibraryView(QWidget):
         self.detail_meta.setObjectName("muted")
         self.detail_meta.setWordWrap(True)
         meta_column.addWidget(self.detail_meta)
+
+        # Справочные данные Shikimori/AniList (нумерация серий у них своя).
+        self.metadata_label = QLabel("")
+        self.metadata_label.setObjectName("muted")
+        self.metadata_label.setWordWrap(True)
+        self.metadata_label.setTextFormat(Qt.TextFormat.RichText)
+        meta_column.addWidget(self.metadata_label)
+
+        meta_buttons = QHBoxLayout()
+        self.metadata_button = QPushButton("Обновить справку")
+        self.metadata_button.setObjectName("secondaryButton")
+        self.metadata_button.clicked.connect(
+            lambda: self.metadata_refresh_requested.emit(self._current)
+        )
+        meta_buttons.addWidget(self.metadata_button)
+
+        self.rebind_button = QPushButton("Выбрать тайтл…")
+        self.rebind_button.setObjectName("secondaryButton")
+        self.rebind_button.clicked.connect(
+            lambda: self.metadata_rebind_requested.emit(self._current)
+        )
+        meta_buttons.addWidget(self.rebind_button)
+        meta_buttons.addStretch(1)
+        meta_column.addLayout(meta_buttons)
+
         meta_column.addStretch(1)
         header.addLayout(meta_column, 1)
         layout.addLayout(header)
@@ -385,12 +412,15 @@ class LibraryView(QWidget):
             self.open_page_button,
             self.auto_check,
             self.favorite_check,
+            self.metadata_button,
+            self.rebind_button,
         ):
             widget.setEnabled(enabled)
 
         if anime is None:
             self.detail_title.setText("Выберите подписку")
             self.detail_meta.setText("")
+            self.metadata_label.setText("")
             self.poster.setVisible(False)
             self.release_model.set_items([])
             return
@@ -413,6 +443,36 @@ class LibraryView(QWidget):
             widget.blockSignals(True)
             widget.setChecked(value)
             widget.blockSignals(False)
+
+    def set_metadata(self, data: dict | None) -> None:
+        """Показывает справку. episodes_* сознательно не выводим как прогресс:
+        нумерация справочника не совпадает с нумерацией раздач на трекере."""
+        if not data:
+            self.metadata_label.setText(
+                "<i>Справочные данные не загружены — нажмите «Обновить справку»</i>"
+            )
+            return
+
+        parts = []
+        if data.get("title_romaji"):
+            parts.append(f"<b>{data['title_romaji']}</b>")
+        for key, fmt in (("kind", "{}"), ("status", "{}"), ("score", "оценка {}")):
+            if data.get(key):
+                parts.append(fmt.format(data[key]))
+        if data.get("episodes_total"):
+            parts.append(f"эпизодов по справочнику: {data['episodes_total']}")
+
+        lines = [" · ".join(parts)] if parts else []
+        if data.get("genres"):
+            lines.append(", ".join(data["genres"][:6]))
+        if data.get("next_episode_at"):
+            number = data.get("next_episode_number")
+            label = f"серия {number}" if number else "следующая серия"
+            when = data["next_episode_at"].strftime("%d.%m.%Y %H:%M")
+            colour = self._palette.accent
+            lines.append(f"<span style='color:{colour}'>Ожидается {label}: {when}</span>")
+
+        self.metadata_label.setText("<br>".join(lines))
 
     def _update_poster(self, anime: Anime) -> None:
         """Постер скачивается при добавлении подписки; если файла нет — просто прячем."""

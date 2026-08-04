@@ -29,11 +29,18 @@ from ..core.models import Anime, Release, ReleaseState
 from ..core.subscription_service import SubscriptionExists, SubscriptionService
 from ..core.torrent_service import TorrentService
 from ..core.update_service import CheckSummary, UpdateService
+from ..metadata import MetadataService
 from ..parsers import ParserRegistry
 from ..services.scheduler import CheckScheduler
 from ..torrent.base import TorrentClientError
 from ..torrent.qbittorrent import QBittorrentClient
-from .dialogs import AddSubscriptionDialog, LogDialog, SettingsDialog, confirm
+from .dialogs import (
+    AddSubscriptionDialog,
+    LogDialog,
+    SettingsDialog,
+    TitlePickerDialog,
+    confirm,
+)
 from .feed_view import FeedView
 from .icons import app_icon
 from .library_view import LibraryView
@@ -61,6 +68,7 @@ class MainWindow(QMainWindow):
         )
         self.updates = UpdateService(self.repos, self.registry, self.torrents)
         self.subscriptions = SubscriptionService(self.repos, self.registry, ctx.paths.posters)
+        self.metadata = MetadataService(self.repos)
 
         self.palette_colors = palette_for(ctx.settings.theme)
         self._build_ui()
@@ -166,6 +174,8 @@ class MainWindow(QMainWindow):
         self.library.open_page_requested.connect(self.open_page)
         self.library.unseen_requested.connect(self.return_to_new)
         self.library.open_magnet_requested.connect(self.open_magnet)
+        self.library.metadata_refresh_requested.connect(self.refresh_metadata)
+        self.library.metadata_rebind_requested.connect(self.rebind_metadata)
         self.library.anime_list.selectionModel().currentChanged.connect(
             lambda *_: self._refresh_releases()
         )
@@ -201,6 +211,7 @@ class MainWindow(QMainWindow):
         self.library.set_releases(
             self.repos.releases.list_for_anime(anime.id) if anime else []
         )
+        self.library.set_metadata(self.repos.metadata.get(anime.id) if anime else None)
 
     # --- состояние занятости ---------------------------------------------
 
@@ -425,6 +436,45 @@ class MainWindow(QMainWindow):
     def open_magnet(self, release: Release) -> None:
         if not self.torrents.open_magnet(release):
             self.status_label.setText("У этой раздачи нет magnet-ссылки")
+
+    # --- справочные данные (Shikimori/AniList) ----------------------------
+
+    def refresh_metadata(self, anime: Anime | None, shikimori_id: str | None = None) -> None:
+        if anime is None or self._busy:
+            return
+        self._run(
+            self.metadata.enrich,
+            lambda _: self._on_metadata_done(anime),
+            anime.id,
+            shikimori_id,
+            busy_message=f"Ищем «{anime.title}» в справочниках…",
+        )
+
+    def _on_metadata_done(self, anime: Anime) -> None:
+        self._set_busy(False)
+        self.refresh_all()
+        self.status_label.setText(f"Справка по «{anime.title}» обновлена")
+
+    def rebind_metadata(self, anime: Anime | None) -> None:
+        """Ручная привязка: авто-подбор может взять не тот сезон."""
+        if anime is None or self._busy:
+            return
+        self._run(
+            self.metadata.search,
+            lambda candidates: self._on_candidates(anime, candidates),
+            anime.title,
+            busy_message=f"Ищем варианты для «{anime.title}»…",
+        )
+
+    def _on_candidates(self, anime: Anime, candidates) -> None:
+        self._set_busy(False)
+        if not candidates:
+            self.status_label.setText(f"В справочнике ничего не найдено по «{anime.title}»")
+            return
+
+        dialog = TitlePickerDialog(candidates, self)
+        if dialog.exec() == TitlePickerDialog.DialogCode.Accepted and dialog.selected:
+            self.refresh_metadata(anime, dialog.selected.external_id)
 
     def mark_seen(self, anime_id: int | None) -> None:
         self.repos.releases.mark_all_seen(anime_id)

@@ -348,6 +348,67 @@ class SourceStatusRepository:
         }
 
 
+class MetadataRepository:
+    """Справочные данные из Shikimori/AniList (таблица anime_metadata)."""
+
+    FIELDS = (
+        "shikimori_id", "anilist_id", "title_ru", "title_romaji", "title_native",
+        "kind", "status", "score", "episodes_total", "episodes_aired",
+        "next_episode_number", "next_episode_at", "poster_url", "genres",
+        "description", "site_url",
+    )
+
+    def __init__(self, db: Database) -> None:
+        self.db = db
+
+    def get(self, anime_id: int) -> dict | None:
+        row = self.db.query_one("SELECT * FROM anime_metadata WHERE anime_id = ?", (anime_id,))
+        if row is None:
+            return None
+        data = dict(row)
+        data["next_episode_at"] = _parse_dt(data.get("next_episode_at"))
+        data["updated_at"] = _parse_dt(data.get("updated_at"))
+        data["genres"] = [g for g in (data.get("genres") or "").split(",") if g]
+        return data
+
+    def save(self, anime_id: int, metadata, anilist_id: str | None = None) -> None:
+        values = {
+            "shikimori_id": metadata.external_id if metadata.provider == "shikimori" else None,
+            "anilist_id": anilist_id,
+            "title_ru": metadata.title_ru,
+            "title_romaji": metadata.title_romaji,
+            "title_native": metadata.title_native,
+            "kind": metadata.kind,
+            "status": metadata.status,
+            "score": metadata.score,
+            "episodes_total": metadata.episodes_total,
+            "episodes_aired": metadata.episodes_aired,
+            "next_episode_number": metadata.next_episode_number,
+            "next_episode_at": (
+                metadata.next_episode_at.isoformat() if metadata.next_episode_at else None
+            ),
+            "poster_url": metadata.poster_url,
+            "genres": ",".join(metadata.genres or []),
+            "description": metadata.description,
+            "site_url": metadata.site_url,
+        }
+        columns = ", ".join(self.FIELDS)
+        placeholders = ", ".join("?" * len(self.FIELDS))
+        updates = ", ".join(f"{name} = excluded.{name}" for name in self.FIELDS)
+
+        with self.db.transaction() as conn:
+            conn.execute(
+                f"""INSERT INTO anime_metadata (anime_id, {columns}, updated_at)
+                    VALUES (?, {placeholders}, ?)
+                    ON CONFLICT(anime_id) DO UPDATE SET {updates}, updated_at = excluded.updated_at""",
+                (anime_id, *(values[name] for name in self.FIELDS), _now()),
+            )
+
+    def delete(self, anime_id: int) -> None:
+        with self.db.transaction() as conn:
+            conn.execute("DELETE FROM anime_metadata WHERE anime_id = ?", (anime_id,))
+
+
 class Repositories:
     """Комплект репозиториев — удобно передавать одним объектом."""
 
@@ -357,3 +418,4 @@ class Repositories:
         self.releases = ReleaseRepository(db)
         self.history = HistoryRepository(db)
         self.sources = SourceStatusRepository(db)
+        self.metadata = MetadataRepository(db)

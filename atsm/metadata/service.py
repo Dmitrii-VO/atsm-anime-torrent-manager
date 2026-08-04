@@ -1,0 +1,101 @@
+"""Сопоставление подписки со справочниками и хранение результата."""
+
+from __future__ import annotations
+
+import re
+
+from loguru import logger
+
+from ..db.repositories import Repositories
+from .anilist import AniListProvider
+from .base import AnimeMetadata, MetadataCandidate, MetadataError
+from .shikimori import ShikimoriProvider
+
+
+def normalize(title: str) -> str:
+    """Для сравнения названий: регистр, ё/е и пунктуация значения не имеют."""
+    text = title.lower().replace("ё", "е")
+    return re.sub(r"[^\w\s]", " ", text).strip()
+
+
+class MetadataService:
+    def __init__(
+        self,
+        repos: Repositories,
+        shikimori: ShikimoriProvider | None = None,
+        anilist: AniListProvider | None = None,
+    ) -> None:
+        self.repos = repos
+        self.shikimori = shikimori or ShikimoriProvider()
+        self.anilist = anilist or AniListProvider()
+
+    # --- поиск -----------------------------------------------------------
+
+    def search(self, title: str, limit: int = 5) -> list[MetadataCandidate]:
+        """Кандидаты для ручной привязки: у одного тайтла бывают сезоны и фильмы."""
+        return self.shikimori.search(title, limit=limit)
+
+    def pick_best(self, title: str, candidates: list[MetadataCandidate]) -> MetadataCandidate | None:
+        """Точное совпадение русского названия важнее порядка выдачи.
+
+        Поиск по «Пожиратель звёзд» возвращает ещё «Пожиратель звёзд 3» и
+        полнометражку — брать вслепую первый результат нельзя.
+        """
+        if not candidates:
+            return None
+
+        target = normalize(title)
+        for candidate in candidates:
+            for variant in (candidate.title_ru, candidate.title_romaji):
+                if variant and normalize(variant) == target:
+                    return candidate
+        return candidates[0]
+
+    # --- обогащение ------------------------------------------------------
+
+    def enrich(self, anime_id: int, shikimori_id: str | None = None) -> AnimeMetadata:
+        """Собирает данные по подписке и сохраняет их.
+
+        Если shikimori_id не задан — берётся сохранённый ранее, иначе тайтл
+        подбирается по названию подписки.
+        """
+        anime = self.repos.anime.get(anime_id)
+        if anime is None:
+            raise MetadataError("Подписка не найдена")
+
+        stored = self.repos.metadata.get(anime_id)
+        external_id = shikimori_id or (stored.get("shikimori_id") if stored else None)
+
+        if not external_id:
+            candidates = self.search(anime.title)
+            best = self.pick_best(anime.title, candidates)
+            if best is None:
+                raise MetadataError(f"На Shikimori ничего не найдено по запросу «{anime.title}»")
+            external_id = best.external_id
+            logger.info("«{}» сопоставлено с Shikimori id {}", anime.title, external_id)
+
+        metadata = self.shikimori.fetch(external_id)
+        anilist_id = self._add_anilist(metadata)
+
+        self.repos.metadata.save(anime_id, metadata, anilist_id=anilist_id)
+        return metadata
+
+    def _add_anilist(self, metadata: AnimeMetadata) -> str | None:
+        """AniList дополняет точным временем выхода серии. Его отказ не критичен."""
+        if not metadata.title_romaji:
+            return None
+        try:
+            extra = self.anilist.fetch_by_title(metadata.title_romaji)
+        except MetadataError as exc:
+            logger.debug("AniList не ответил: {}", exc)
+            return None
+
+        if extra is None:
+            return None
+
+        # Точное время выхода — то, ради чего AniList и нужен.
+        if extra.next_episode_at:
+            metadata.next_episode_at = extra.next_episode_at
+            metadata.next_episode_number = extra.next_episode_number
+        metadata.merge(extra)
+        return extra.external_id

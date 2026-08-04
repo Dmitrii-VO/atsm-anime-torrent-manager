@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QListWidget,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
@@ -376,3 +377,50 @@ def confirm(parent, title: str, text: str) -> bool:
         QMessageBox.StandardButton.No,
     )
     return answer == QMessageBox.StandardButton.Yes
+
+
+class TitlePickerDialog(QDialog):
+    """Выбор тайтла в справочнике (ТЗ §3 — сопоставление подписки).
+
+    Нужен, потому что поиск по названию возвращает и сезоны, и полнометражки:
+    «Пожиратель звёзд» находит ещё «Пожиратель звёзд 2/3» и два фильма.
+    """
+
+    def __init__(self, candidates, parent=None) -> None:
+        super().__init__(parent)
+        self.candidates = candidates
+        self.selected = None
+
+        self.setWindowTitle("Выбор тайтла")
+        self.setMinimumWidth(560)
+
+        layout = QVBoxLayout(self)
+        hint = QLabel(
+            "Выберите, какому тайтлу справочника соответствует подписка.\n"
+            "У сериала бывает несколько сезонов и фильмов с похожими названиями."
+        )
+        hint.setObjectName("muted")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        self.list = QListWidget()
+        for candidate in candidates:
+            self.list.addItem(candidate.label)
+        if candidates:
+            self.list.setCurrentRow(0)
+        self.list.itemDoubleClicked.connect(lambda *_: self._accept())
+        layout.addWidget(self.list, 1)
+
+        box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        box.button(QDialogButtonBox.StandardButton.Ok).setText("Привязать")
+        box.accepted.connect(self._accept)
+        box.rejected.connect(self.reject)
+        layout.addWidget(box)
+
+    def _accept(self) -> None:
+        row = self.list.currentRow()
+        if 0 <= row < len(self.candidates):
+            self.selected = self.candidates[row]
+            self.accept()
