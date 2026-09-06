@@ -15,6 +15,34 @@ class ReleaseState(StrEnum):
     IGNORED = "ignored"
 
 
+def supersedes(new: "Release", old: "Release") -> bool:
+    """Новая пачка полностью заменяет старую.
+
+    Источники вроде AniLiberty обновляют раздачу на месте: «1-4» превращается
+    в «1-5». Старая пачка тогда не нужна — ни в списке, ни в торрент-клиенте.
+    Качество сравнивается, иначе пачка в HEVC «съела» бы пачку в AVC, которую
+    пользователь держит намеренно.
+    """
+    if new.episode is None or old.episode is None:
+        return False
+    if (new.source, new.quality) != (old.source, old.quality):
+        return False
+    new_end = new.episode_end or new.episode
+    old_end = old.episode_end or old.episode
+    if (new.episode, new_end) == (old.episode, old_end):
+        return False  # перезалив той же раздачи, а не замена пачки
+    return new.episode <= old.episode and old_end <= new_end
+
+
+def drop_superseded(releases: list["Release"]) -> list["Release"]:
+    """Оставляет только актуальные раздачи, порядок не меняет."""
+    return [
+        item
+        for item in releases
+        if not any(supersedes(other, item) for other in releases if other is not item)
+    ]
+
+
 class AnimeStatus(StrEnum):
     ONGOING = "ongoing"
     COMPLETED = "completed"

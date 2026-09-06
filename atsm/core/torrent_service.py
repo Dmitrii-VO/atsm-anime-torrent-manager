@@ -16,7 +16,7 @@ from ..parsers import ParserRegistry
 from ..parsers.base import ParserError
 from ..torrent.base import BaseTorrentClient, TorrentClientError
 from ..torrent.bencode import BencodeError, info_hash
-from .models import HistoryAction, Release, ReleaseState
+from .models import HistoryAction, Release, ReleaseState, supersedes
 
 _UNSAFE_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _MAGNET_HASH = re.compile(r"urn:btih:([0-9a-fA-F]{40})")
@@ -169,7 +169,7 @@ class TorrentService:
         replaced = [
             old
             for old in self.repos.releases.list_for_anime(release.anime_id)
-            if old.id != release.id and old.info_hash and _covers(release, old)
+            if old.id != release.id and old.info_hash and supersedes(release, old)
         ]
         if not replaced:
             return
@@ -221,17 +221,6 @@ class TorrentService:
         if anime is None:
             raise ParserError("Подписка не найдена")
         return anime.source
-
-
-def _covers(new: Release, old: Release) -> bool:
-    """Диапазон серий старой раздачи целиком лежит внутри новой."""
-    if new.episode is None or old.episode is None:
-        return False
-    new_end = new.episode_end or new.episode
-    old_end = old.episode_end or old.episode
-    if (new.episode, new_end) == (old.episode, old_end):
-        return False  # та же серия, перезалитая заново — не замена пачки
-    return new.episode <= old.episode and old_end <= new_end
 
 
 def _as_release_info(release: Release):

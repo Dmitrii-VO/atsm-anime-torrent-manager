@@ -156,3 +156,29 @@ class TestHistoryAndSources:
         assert status["state"] == SourceState.LAYOUT_CHANGED
         assert status["message"] == "нет блоков раздач"
         assert status["checked_at"] is not None
+
+
+def test_drop_superseded_убирает_перекрытые_пачки() -> None:
+    """В списке остаётся только актуальная пачка каждого качества."""
+    from atsm.core.models import Release, drop_superseded
+
+    def pack(rid, start, end, quality="HEVC", source="anilibria"):
+        return Release(
+            id=rid,
+            anime_id=1,
+            external_id=str(rid),
+            episode_raw="",
+            episode=start,
+            episode_end=end,
+            quality=quality,
+            source=source,
+        )
+
+    hevc_19, hevc_21 = pack(1, 1, 19), pack(2, 1, 21)
+    avc_19 = pack(3, 1, 19, quality="AVC")
+    single = pack(4, 21, None, quality=None, source="astar")
+
+    kept = drop_superseded([hevc_19, hevc_21, avc_19, single])
+
+    # Пачка HEVC 1-19 перекрыта, AVC и отдельная серия другого источника — нет.
+    assert [r.id for r in kept] == [2, 3, 4]

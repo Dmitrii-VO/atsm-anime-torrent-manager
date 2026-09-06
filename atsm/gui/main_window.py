@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 
 from ..app import AppContext
 from ..config import save_settings
-from ..core.models import Anime, Release, ReleaseState
+from ..core.models import Anime, Release, ReleaseState, drop_superseded
 from ..core.subscription_service import SubscriptionExists, SubscriptionService
 from ..core.torrent_service import TorrentService
 from ..core.update_service import CheckSummary, UpdateService
@@ -231,8 +231,9 @@ class MainWindow(QMainWindow):
     def _refresh_releases(self) -> None:
         entry = self.library.current_entry()
         # У объединённой записи раздачи берутся сразу из всех её источников.
+        # Пачки, целиком перекрытые более новыми, в списке только мешают.
         self.library.set_releases(
-            self.repos.releases.list_for_anime_ids(entry.ids) if entry else []
+            drop_superseded(self.repos.releases.list_for_anime_ids(entry.ids)) if entry else []
         )
         self.library.set_metadata(self.repos.metadata.get(entry.id) if entry else None)
 
