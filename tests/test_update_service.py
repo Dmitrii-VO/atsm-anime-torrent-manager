@@ -93,6 +93,26 @@ def test_seeders_refreshed_for_known_releases(service, anime, parser, repos) -> 
     assert stored["1"].seeders == 777
 
 
+def test_external_fields_refreshed_for_known_release(service, anime, parser, repos) -> None:
+    changed = release(
+        "1",
+        1,
+        quality="1080p HEVC",
+        torrent_url="https://new-mirror.example/1.torrent",
+        magnet="magnet:?xt=urn:btih:" + "a" * 40,
+    )
+    parser.set_releases([changed, release("2", 2)])
+
+    service.check_anime(anime)
+
+    stored = {r.external_id: r for r in repos.releases.list_for_anime(anime.id)}["1"]
+    assert stored.quality == "1080p HEVC"
+    assert stored.torrent_url == "https://new-mirror.example/1.torrent"
+    assert stored.magnet == changed.magnet
+    assert stored.is_seen is True
+    assert stored.state == ReleaseState.NEW
+
+
 def test_pack_release_is_detected_as_new(service, anime, parser, repos) -> None:
     """Сборник без номера серии тоже новинка — диффинг идёт по external_id."""
     from atsm.parsers.base import ReleaseInfo

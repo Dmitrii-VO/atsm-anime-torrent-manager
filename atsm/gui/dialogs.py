@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from inspect import Parameter, signature
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -131,6 +133,10 @@ class AddSubscriptionDialog(QDialog):
         self.result_info = anime
         self.accept()
 
+    def done(self, result: int) -> None:
+        self.workers.shutdown()
+        super().done(result)
+
 
 class SettingsDialog(QDialog):
     """Настройки приложения (ТЗ §23)."""
@@ -138,6 +144,7 @@ class SettingsDialog(QDialog):
     def __init__(self, settings: Settings, torrent_client_factory, parent=None) -> None:
         super().__init__(parent)
         self.settings = settings
+        self.draft = settings.model_copy(deep=True)
         self.torrent_client_factory = torrent_client_factory
         self.workers = WorkerRunner()
 
@@ -165,41 +172,41 @@ class SettingsDialog(QDialog):
         self.interval = QSpinBox()
         self.interval.setRange(5, 24 * 60)
         self.interval.setSuffix(" мин")
-        self.interval.setValue(self.settings.check_interval_minutes)
+        self.interval.setValue(self.draft.check_interval_minutes)
         form.addRow("Интервал проверки:", self.interval)
 
         self.check_on_startup = QCheckBox("Проверять при запуске")
-        self.check_on_startup.setChecked(self.settings.check_on_startup)
+        self.check_on_startup.setChecked(self.draft.check_on_startup)
         form.addRow("", self.check_on_startup)
 
         self.minimize_to_tray = QCheckBox("Сворачивать в трей вместо выхода")
-        self.minimize_to_tray.setChecked(self.settings.minimize_to_tray)
+        self.minimize_to_tray.setChecked(self.draft.minimize_to_tray)
         form.addRow("", self.minimize_to_tray)
 
         self.autostart = QCheckBox("Запускать вместе с Windows")
         # Реестр — источник правды: пользователь мог убрать запись мимо приложения.
-        self.autostart.setChecked(is_autostart_enabled() or self.settings.autostart)
+        self.autostart.setChecked(is_autostart_enabled() or self.draft.autostart)
         form.addRow("", self.autostart)
 
         self.notifications = QCheckBox("Показывать уведомления")
-        self.notifications.setChecked(self.settings.notifications_enabled)
+        self.notifications.setChecked(self.draft.notifications_enabled)
         form.addRow("", self.notifications)
 
         self.metadata_autofetch = QCheckBox(
             "Загружать справочные данные при добавлении подписки"
         )
-        self.metadata_autofetch.setChecked(self.settings.metadata_autofetch)
+        self.metadata_autofetch.setChecked(self.draft.metadata_autofetch)
         form.addRow("", self.metadata_autofetch)
 
         self.theme = QComboBox()
         for key, label in THEME_LABELS.items():
             self.theme.addItem(label, key)
-        self.theme.setCurrentIndex(max(self.theme.findData(self.settings.theme), 0))
+        self.theme.setCurrentIndex(max(self.theme.findData(self.draft.theme), 0))
         form.addRow("Тема оформления:", self.theme)
 
         self.log_level = QComboBox()
         self.log_level.addItems(["DEBUG", "INFO", "WARNING", "ERROR"])
-        self.log_level.setCurrentText(self.settings.log_level)
+        self.log_level.setCurrentText(self.draft.log_level)
         form.addRow("Уровень журнала:", self.log_level)
         return page
 
@@ -209,7 +216,7 @@ class SettingsDialog(QDialog):
 
         group = QGroupBox("qBittorrent Web API")
         form = QFormLayout(group)
-        qbt = self.settings.qbittorrent
+        qbt = self.draft.qbittorrent
 
         self.host = QLineEdit(qbt.host)
         form.addRow("Адрес:", self.host)
@@ -245,6 +252,15 @@ class SettingsDialog(QDialog):
         self.add_paused = QCheckBox("Добавлять на паузе")
         self.add_paused.setChecked(qbt.add_paused)
         form.addRow("", self.add_paused)
+
+        self.sequential = QCheckBox("Качать по порядку (можно смотреть до конца загрузки)")
+        self.sequential.setChecked(qbt.sequential_download)
+        form.addRow("", self.sequential)
+
+        self.delete_replaced = QCheckBox("Удалять из клиента пачки, заменённые новыми")
+        self.delete_replaced.setToolTip("Файлы на диске остаются — их использует новая раздача")
+        self.delete_replaced.setChecked(qbt.delete_replaced)
+        form.addRow("", self.delete_replaced)
         layout.addWidget(group)
 
         test_row = QHBoxLayout()
@@ -262,10 +278,10 @@ class SettingsDialog(QDialog):
         page = QWidget()
         form = QFormLayout(page)
 
-        self.astar_host = QLineEdit(self.settings.sources.astar_host)
+        self.astar_host = QLineEdit(self.draft.sources.astar_host)
         form.addRow("Текущее зеркало astar:", self.astar_host)
 
-        self.mirrors = QPlainTextEdit("\n".join(self.settings.sources.astar_mirrors))
+        self.mirrors = QPlainTextEdit("\n".join(self.draft.sources.astar_mirrors))
         self.mirrors.setPlaceholderText("по одному домену в строке")
         self.mirrors.setMaximumHeight(160)
         form.addRow("Список зеркал:", self.mirrors)
@@ -289,28 +305,40 @@ class SettingsDialog(QDialog):
         self.test_result.setText("Проверяем…")
         self._apply_to_settings()
 
-        client = self.torrent_client_factory()
+        client = self._make_test_client()
         self.workers.start(
             client.test_connection,
             on_done=lambda version: self._test_done(f"qBittorrent {version} — соединение есть"),
             on_failed=lambda exc: self._test_done(f"Ошибка: {exc}"),
         )
 
+    def _make_test_client(self):
+        """Новый контракт принимает draft; фабрики без аргумента остаются рабочими."""
+        parameters = signature(self.torrent_client_factory).parameters.values()
+        accepts_draft = any(
+            parameter.kind
+            in (Parameter.POSITIONAL_ONLY, Parameter.POSITIONAL_OR_KEYWORD, Parameter.VAR_POSITIONAL)
+            for parameter in parameters
+        )
+        if accepts_draft:
+            return self.torrent_client_factory(self.draft)
+        return self.torrent_client_factory()
+
     def _test_done(self, message: str) -> None:
         self.test_button.setEnabled(True)
         self.test_result.setText(message)
 
     def _apply_to_settings(self) -> None:
-        self.settings.check_interval_minutes = self.interval.value()
-        self.settings.check_on_startup = self.check_on_startup.isChecked()
-        self.settings.minimize_to_tray = self.minimize_to_tray.isChecked()
-        self.settings.autostart = self.autostart.isChecked()
-        self.settings.notifications_enabled = self.notifications.isChecked()
-        self.settings.metadata_autofetch = self.metadata_autofetch.isChecked()
-        self.settings.log_level = self.log_level.currentText()
-        self.settings.theme = self.theme.currentData()
+        self.draft.check_interval_minutes = self.interval.value()
+        self.draft.check_on_startup = self.check_on_startup.isChecked()
+        self.draft.minimize_to_tray = self.minimize_to_tray.isChecked()
+        self.draft.autostart = self.autostart.isChecked()
+        self.draft.notifications_enabled = self.notifications.isChecked()
+        self.draft.metadata_autofetch = self.metadata_autofetch.isChecked()
+        self.draft.log_level = self.log_level.currentText()
+        self.draft.theme = self.theme.currentData()
 
-        qbt = self.settings.qbittorrent
+        qbt = self.draft.qbittorrent
         qbt.host = self.host.text().strip()
         qbt.port = self.port.value()
         qbt.use_https = self.https.isChecked()
@@ -319,15 +347,24 @@ class SettingsDialog(QDialog):
         qbt.category = self.category.text().strip()
         qbt.save_path = self.save_path.text().strip()
         qbt.add_paused = self.add_paused.isChecked()
+        qbt.sequential_download = self.sequential.isChecked()
+        qbt.delete_replaced = self.delete_replaced.isChecked()
 
-        self.settings.sources.astar_host = self.astar_host.text().strip()
+        self.draft.sources.astar_host = self.astar_host.text().strip()
         mirrors = [line.strip() for line in self.mirrors.toPlainText().splitlines() if line.strip()]
         if mirrors:
-            self.settings.sources.astar_mirrors = mirrors
+            self.draft.sources.astar_mirrors = mirrors
 
     def _save(self) -> None:
         self._apply_to_settings()
+        accepted = self.draft.model_copy(deep=True)
+        for field in type(self.settings).model_fields:
+            setattr(self.settings, field, getattr(accepted, field))
         self.accept()
+
+    def done(self, result: int) -> None:
+        self.workers.shutdown()
+        super().done(result)
 
 
 class LogDialog(QDialog):

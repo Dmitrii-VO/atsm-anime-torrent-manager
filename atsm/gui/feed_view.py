@@ -24,12 +24,15 @@ CARD_HEIGHT = 76
 CARD_MARGIN = 6
 BUTTON_WIDTH = 116
 BUTTON_HEIGHT = 32
+SEEN_WIDTH = 118
+BUTTON_GAP = 8
 
 
 class FeedDelegate(QStyledItemDelegate):
     """Карточка серии с кнопкой «Скачать» прямо в строке (макет из ТЗ §5)."""
 
     download_clicked = Signal(QModelIndex)
+    seen_clicked = Signal(QModelIndex)
 
     def __init__(self, parent=None, palette: Palette = DARK) -> None:
         super().__init__(parent)
@@ -70,7 +73,7 @@ class FeedDelegate(QStyledItemDelegate):
         painter.drawRoundedRect(QRect(card.left(), card.top(), 4, card.height()), 2, 2)
 
         text_left = card.left() + 18
-        text_width = card.width() - BUTTON_WIDTH - 48
+        text_width = card.width() - BUTTON_WIDTH - SEEN_WIDTH - BUTTON_GAP - 48
 
         title_font = QFont(option.font)
         title_font.setBold(True)
@@ -117,6 +120,13 @@ class FeedDelegate(QStyledItemDelegate):
         painter.setPen(QColor(self.palette.accent_text))
         painter.drawText(rect, int(Qt.AlignmentFlag.AlignCenter), "Повторить" if failed else "Скачать")
 
+        seen = self._seen_rect(card)
+        painter.setBrush(QColor(self.palette.hover if hovered else self.palette.surface))
+        painter.setPen(QPen(QColor(self.palette.border), 1))
+        painter.drawRoundedRect(seen, 8, 8)
+        painter.setPen(QColor(self.palette.text_muted))
+        painter.drawText(seen, int(Qt.AlignmentFlag.AlignCenter), "Просмотрено")
+
     @staticmethod
     def _card_rect(rect: QRect) -> QRect:
         return QRect(rect.left() + 4, rect.top() + 3, rect.width() - 12, CARD_HEIGHT)
@@ -130,11 +140,24 @@ class FeedDelegate(QStyledItemDelegate):
             BUTTON_HEIGHT,
         )
 
+    @staticmethod
+    def _seen_rect(card: QRect) -> QRect:
+        return QRect(
+            card.right() - BUTTON_WIDTH - SEEN_WIDTH - BUTTON_GAP - 16,
+            card.top() + (CARD_HEIGHT - BUTTON_HEIGHT) // 2,
+            SEEN_WIDTH,
+            BUTTON_HEIGHT,
+        )
+
     def editorEvent(self, event, model, option, index) -> bool:  # noqa: N802
         if event.type() == QEvent.Type.MouseButtonRelease:
             card = self._card_rect(option.rect)
-            if self._button_rect(card).contains(event.position().toPoint()):
+            point = event.position().toPoint()
+            if self._button_rect(card).contains(point):
                 self.download_clicked.emit(index)
+                return True
+            if self._seen_rect(card).contains(point):
+                self.seen_clicked.emit(index)
                 return True
         return False
 
@@ -145,6 +168,7 @@ class FeedView(QWidget):
     download_requested = Signal(object)  # Release
     download_all_requested = Signal()
     mark_seen_requested = Signal(object)
+    release_seen_requested = Signal(object)  # Release
     open_anime_requested = Signal(object)
 
     def __init__(self, palette: Palette = DARK) -> None:
@@ -197,6 +221,7 @@ class FeedView(QWidget):
 
         self.delegate = FeedDelegate(self.list, self._palette)
         self.delegate.download_clicked.connect(self._on_button)
+        self.delegate.seen_clicked.connect(self._on_seen_button)
         self.list.setItemDelegate(self.delegate)
         self.list.doubleClicked.connect(self._on_double_click)
         layout.addWidget(self.list, 1)
@@ -205,6 +230,11 @@ class FeedView(QWidget):
         release = self.model.release_at(index.row())
         if release:
             self.download_requested.emit(release)
+
+    def _on_seen_button(self, index: QModelIndex) -> None:
+        release = self.model.release_at(index.row())
+        if release:
+            self.release_seen_requested.emit(release)
 
     def _on_double_click(self, index: QModelIndex) -> None:
         release = self.model.release_at(index.row())

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from atsm.db import SCHEMA_VERSION, Database
+from atsm.db import database as database_module
 
 EXPECTED_TABLES = {
     "anime",
@@ -97,3 +98,26 @@ def test_transaction_rolls_back(db: Database) -> None:
             raise ValueError("сбой посреди транзакции")
 
     assert db.query_one("SELECT COUNT(*) AS n FROM anime")["n"] == 0
+
+
+def test_failed_migration_rolls_back_and_can_be_retried(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "broken.db"
+    migrations = {
+        1: lambda: "CREATE TABLE first_step (id INTEGER);",
+        2: lambda: "CREATE TABLE partial_step (id INTEGER); SELECT * FROM missing_table;",
+    }
+    monkeypatch.setattr(database_module, "SCHEMA_VERSION", 2)
+    monkeypatch.setattr(database_module, "MIGRATIONS", migrations)
+
+    database = Database(path)
+    with pytest.raises(sqlite3.OperationalError):
+        database.migrate()
+
+    assert "first_step" not in database.table_names()
+    assert "partial_step" not in database.table_names()
+    assert database.current_version() == 0
+
+    migrations[2] = lambda: "CREATE TABLE second_step (id INTEGER);"
+    assert database.migrate() == 2
+    assert {"first_step", "second_step"}.issubset(database.table_names())
+    database.close()

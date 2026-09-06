@@ -206,6 +206,65 @@ class TestService:
         assert repos.metadata.get(anime_id)["anilist_id"] is None
 
     @responses.activate
+    def test_repeat_enrich_preserves_anilist_data_after_temporary_failure(
+        self, repos, anime_id
+    ) -> None:
+        """Временный отказ AniList не должен стирать результат прошлого обновления."""
+        detail_without_description = {**DETAIL_RESPONSE, "description": None}
+        responses.get(f"{SHIKI}/animes/44218", json=detail_without_description)
+        responses.get(
+            f"{SHIKI}/animes/44218",
+            json={
+                **detail_without_description,
+                "next_episode_at": "2026-09-01T12:00:00+03:00",
+            },
+        )
+        responses.post(ANILIST, json=ANILIST_MEDIA)
+        responses.post(ANILIST, status=500, json={})
+        service = MetadataService(
+            repos, ShikimoriProvider(limiter=no_wait()), AniListProvider(limiter=no_wait())
+        )
+
+        service.enrich(anime_id, shikimori_id="44218")
+        before = repos.metadata.get(anime_id)
+        service.enrich(anime_id)
+        after = repos.metadata.get(anime_id)
+
+        assert after["anilist_id"] == before["anilist_id"] == "117012"
+        assert after["next_episode_at"] == before["next_episode_at"]
+        assert after["next_episode_number"] == before["next_episode_number"] == 26
+        assert after["description"] == before["description"] == "desc"
+
+    @responses.activate
+    def test_backfill_franchise_updates_only_franchise(self, repos, anime_id) -> None:
+        """Дозагрузка франшизы не должна выполнять полный metadata UPSERT."""
+        original = AnimeMetadata(
+            "shikimori",
+            "44218",
+            title_ru="Сохранённое название",
+            next_episode_number=26,
+            next_episode_at=datetime(2026, 8, 9, 12, 0),
+            description="Данные AniList",
+        )
+        repos.metadata.save(anime_id, original, anilist_id="117012")
+        with repos.db.transaction() as conn:
+            conn.execute("UPDATE anime_metadata SET franchise = NULL WHERE anime_id = ?", (anime_id,))
+        before = repos.metadata.get(anime_id)
+        responses.get(
+            f"{SHIKI}/animes/44218",
+            json={**DETAIL_RESPONSE, "franchise": "Tunshi Xingkong"},
+        )
+        service = MetadataService(repos, ShikimoriProvider(limiter=no_wait()))
+
+        assert service.backfill_franchise() == 1
+
+        after = repos.metadata.get(anime_id)
+        assert after["franchise"] == "Tunshi Xingkong"
+        for field in repos.metadata.FIELDS:
+            if field != "franchise":
+                assert after[field] == before[field]
+
+    @responses.activate
     def test_explicit_id_skips_search(self, repos, anime_id) -> None:
         responses.get(f"{SHIKI}/animes/44218", json=DETAIL_RESPONSE)
         responses.post(ANILIST, json=ANILIST_MEDIA)

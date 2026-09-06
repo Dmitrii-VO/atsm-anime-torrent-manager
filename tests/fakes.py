@@ -82,7 +82,9 @@ def release(external_id: str, episode: int | None, **kwargs) -> ReleaseInfo:
         size_bytes=kwargs.pop("size_bytes", 884_998_144),
         seeders=kwargs.pop("seeders", 10),
         published_at=kwargs.pop("published_at", date(2026, 8, 3)),
-        torrent_url=f"https://example.test/engine/gettorrent.php?id={external_id}",
+        torrent_url=kwargs.pop(
+            "torrent_url", f"https://example.test/engine/gettorrent.php?id={external_id}"
+        ),
         **kwargs,
     )
 

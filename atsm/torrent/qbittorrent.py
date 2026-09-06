@@ -39,6 +39,7 @@ class QBittorrentClient(BaseTorrentClient):
                 data={"username": self.settings.username, "password": self.settings.password},
                 headers={"Referer": self.settings.base_url},
                 timeout=self.timeout,
+                allow_redirects=False,
             )
         except requests.RequestException as exc:
             # Полный стек urllib3 идёт в лог, пользователю — что делать.
@@ -55,13 +56,17 @@ class QBittorrentClient(BaseTorrentClient):
             )
 
         body = response.text.strip()
-        if body.lower().startswith("fail"):
+        if response.status_code == 200 and body.casefold() == "fails.":
             raise TorrentClientError("Неверный логин или пароль qBittorrent")
-        if response.status_code >= 400:
-            raise TorrentClientError(f"qBittorrent вернул HTTP {response.status_code} при входе")
+        if not (
+            response.status_code == 204
+            or response.status_code == 200
+            and body.casefold() == "ok."
+        ):
+            raise TorrentClientError(
+                f"Неожиданный ответ qBittorrent при входе: HTTP {response.status_code}"
+            )
 
-        # Успехом считается не только "Ok.": при включённом в qBittorrent обходе
-        # авторизации для localhost версия 5.x отвечает 204 с пустым телом.
         self._logged_in = True
         logger.debug("Вход в qBittorrent выполнен (ответ: {!r})", body or response.status_code)
 
@@ -73,6 +78,7 @@ class QBittorrentClient(BaseTorrentClient):
 
         url = f"{self.api}{path}"
         kwargs.setdefault("timeout", self.timeout)
+        kwargs.setdefault("allow_redirects", False)
         kwargs.setdefault("headers", {}).setdefault("Referer", self.settings.base_url)
 
         try:
@@ -89,7 +95,7 @@ class QBittorrentClient(BaseTorrentClient):
                 f"Потеряна связь с qBittorrent ({self.settings.base_url})"
             ) from exc
 
-        if response.status_code >= 400 and response.status_code not in allow:
+        if not 200 <= response.status_code < 300 and response.status_code not in allow:
             raise TorrentClientError(f"qBittorrent вернул HTTP {response.status_code}")
         return response
 
@@ -97,6 +103,8 @@ class QBittorrentClient(BaseTorrentClient):
 
     def test_connection(self) -> str:
         version = self._request("GET", "/app/version").text.strip()
+        if not version:
+            raise TorrentClientError("qBittorrent вернул пустую версию")
         logger.info("qBittorrent {} доступен", version)
         return version
 
@@ -129,6 +137,11 @@ class QBittorrentClient(BaseTorrentClient):
             options["category"] = self.settings.category
         if self.settings.save_path:
             options["savepath"] = self.settings.save_path
+        if self.settings.sequential_download:
+            # Первая и последняя части несут заголовки контейнера — без них
+            # плеер не откроет растущий файл.
+            options["sequentialDownload"] = "true"
+            options["firstLastPiecePrio"] = "true"
         return options
 
     @staticmethod
@@ -137,11 +150,27 @@ class QBittorrentClient(BaseTorrentClient):
         if response.status_code == ALREADY_ADDED:
             return AddResult(ok=True, message="Раздача уже есть в торрент-клиенте")
 
+        # Успех — любой 2xx, кроме явного «Fails.». На магнит-ссылки и на части
+        # версий клиент отвечает 200 с пустым телом, и проверка на строку «Ok.»
+        # объявляла принятую раздачу отклонённой.
         body = response.text.strip()
-        # API отвечает "Ok." даже на уже существующую раздачу, "Fails." — на отказ.
-        if body.lower().startswith("fail"):
+        if body.casefold().startswith("fail"):
             return AddResult(ok=False, message=f"qBittorrent отклонил раздачу: {label}")
         return AddResult(ok=True, message="Отправлено в qBittorrent")
+
+    def delete(self, hashes: list[str], delete_files: bool = False) -> None:
+        """Убирает раздачи из клиента. Файлы по умолчанию остаются на диске."""
+        if not hashes:
+            return
+        self._request(
+            "POST",
+            "/torrents/delete",
+            data={
+                "hashes": "|".join(h.lower() for h in hashes),
+                "deleteFiles": "true" if delete_files else "false",
+            },
+        )
+        logger.info("Удалено раздач из qBittorrent: {}", len(hashes))
 
     def torrent_states(self, hashes: list[str]) -> dict[str, str]:
         """Состояния раздач по info_hash — для статуса «скачана» (ТЗ §13)."""

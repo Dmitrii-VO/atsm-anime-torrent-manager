@@ -79,6 +79,11 @@ class QBittorrentSettings(BaseModel):
     category: str = "anime"
     save_path: str = ""
     add_paused: bool = False
+    # Качать части по порядку — тогда серию можно смотреть, не дожидаясь конца.
+    sequential_download: bool = False
+    # Пачка «1-4» превращается в «1-5»: старую раздачу из клиента убираем,
+    # файлы не трогаем — они уже скачаны и нужны новой раздаче.
+    delete_replaced: bool = True
 
     @property
     def base_url(self) -> str:

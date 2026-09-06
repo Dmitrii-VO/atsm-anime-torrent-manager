@@ -37,6 +37,15 @@ class TestBencode:
     def test_info_hash_is_stable(self) -> None:
         assert info_hash(TORRENT) == info_hash(TORRENT)
 
+    def test_info_hash_ignores_marker_inside_string(self) -> None:
+        torrent = b"d7:comment11:xxx4:infoxx4:infod4:name4:testee"
+        expected = hashlib.sha1(b"d4:name4:teste").hexdigest()
+        assert info_hash(torrent) == expected
+
+    def test_info_hash_rejects_trailing_garbage(self) -> None:
+        with pytest.raises(BencodeError, match="Лишние данные"):
+            info_hash(TORRENT + b"garbage")
+
     def test_rejects_garbage(self) -> None:
         with pytest.raises(BencodeError):
             info_hash(b"<html>404</html>")
@@ -69,6 +78,35 @@ class TestQBittorrentClient:
         assert client.test_connection() == "v5.2.3"
 
     @responses.activate
+    def test_login_ok_is_case_insensitive_and_trimmed(self, client: QBittorrentClient) -> None:
+        responses.post(f"{API}/auth/login", body="  oK.\r\n")
+        responses.get(f"{API}/app/version", body="v5.2.3")
+        assert client.test_connection() == "v5.2.3"
+
+    @pytest.mark.parametrize(
+        ("status", "body"),
+        [(200, ""), (200, "<html>Ok.</html>"), (201, "Ok.")],
+    )
+    @responses.activate
+    def test_login_rejects_undocumented_success(
+        self, client: QBittorrentClient, status: int, body: str
+    ) -> None:
+        responses.post(f"{API}/auth/login", status=status, body=body)
+        with pytest.raises(TorrentClientError, match="Неожиданный ответ"):
+            client.test_connection()
+
+    @responses.activate
+    def test_login_does_not_follow_redirect(self, client: QBittorrentClient) -> None:
+        responses.post(
+            f"{API}/auth/login",
+            status=302,
+            headers={"Location": "http://example.test/login"},
+        )
+        with pytest.raises(TorrentClientError, match="HTTP 302"):
+            client.test_connection()
+        assert len(responses.calls) == 1
+
+    @responses.activate
     def test_login_ban(self, client: QBittorrentClient) -> None:
         responses.post(f"{API}/auth/login", status=403, body="banned")
         with pytest.raises(TorrentClientError, match="заблокирован"):
@@ -92,6 +130,13 @@ class TestQBittorrentClient:
         assert "HTTPConnectionPool" not in message
         assert "urllib3" not in message
         assert len(message) < 200
+
+    @responses.activate
+    def test_connection_rejects_empty_version(self, client: QBittorrentClient) -> None:
+        responses.post(f"{API}/auth/login", body="Ok.")
+        responses.get(f"{API}/app/version", body=" \r\n")
+        with pytest.raises(TorrentClientError, match="пустую версию"):
+            client.test_connection()
 
     @responses.activate
     def test_add_torrent_file_with_options(self, client: QBittorrentClient) -> None:
@@ -137,6 +182,31 @@ class TestQBittorrentClient:
         responses.post(f"{API}/torrents/add", body="Fails.")
         assert client.add_torrent_file(TORRENT, "x.torrent").ok is False
 
+    @pytest.mark.parametrize(
+        ("status", "body"),
+        [(200, ""), (200, "<html>Ok.</html>"), (204, "")],
+    )
+    @responses.activate
+    def test_add_accepts_any_2xx(
+        self, client: QBittorrentClient, status: int, body: str
+    ) -> None:
+        """Раздача принята, а тело ответа не «Ok.» — раньше это звалось отказом."""
+        responses.post(f"{API}/auth/login", body="Ok.")
+        responses.post(f"{API}/torrents/add", status=status, body=body)
+        assert client.add_magnet("magnet:?xt=urn:btih:" + "e" * 40).ok is True
+
+    @responses.activate
+    def test_add_does_not_follow_redirect(self, client: QBittorrentClient) -> None:
+        responses.post(f"{API}/auth/login", body="Ok.")
+        responses.post(
+            f"{API}/torrents/add",
+            status=302,
+            headers={"Location": "http://example.test/add"},
+        )
+        with pytest.raises(TorrentClientError, match="HTTP 302"):
+            client.add_magnet("magnet:?xt=urn:btih:" + "f" * 40)
+        assert len(responses.calls) == 2
+
     @responses.activate
     def test_expired_session_triggers_relogin(self, client: QBittorrentClient) -> None:
         """qBittorrent перезапустился — сессия протухла, нужен повторный вход."""
@@ -157,12 +227,25 @@ class TestQBittorrentClient:
         assert client.torrent_states(["abc123"]) == {"abc123": "stalledUP"}
 
 
+def test_sequential_download_flags() -> None:
+    """Флаги потокового просмотра уходят в клиент только при включённой настройке."""
+    from atsm.torrent.qbittorrent import QBittorrentClient
+
+    off = QBittorrentClient(QBittorrentSettings())._add_options()
+    assert "sequentialDownload" not in off
+
+    on = QBittorrentClient(QBittorrentSettings(sequential_download=True))._add_options()
+    assert on["sequentialDownload"] == "true" and on["firstLastPiecePrio"] == "true"
+
+
 class FakeClient:
     def __init__(self) -> None:
         self.added: list[tuple[bytes, str]] = []
         self.result = AddResult(ok=True, message="Отправлено в qBittorrent")
         self.error: Exception | None = None
         self.states: dict[str, str] = {}
+        self.deleted: list[tuple[list[str], bool]] = []
+        self.settings = QBittorrentSettings(delete_replaced=True)
 
     def add_torrent_file(self, data: bytes, filename: str) -> AddResult:
         if self.error:
@@ -178,6 +261,9 @@ class FakeClient:
 
     def torrent_states(self, hashes: list[str]) -> dict[str, str]:
         return self.states
+
+    def delete(self, hashes: list[str], delete_files: bool = False) -> None:
+        self.deleted.append((hashes, delete_files))
 
 
 class TestTorrentService:
@@ -255,6 +341,33 @@ class TestTorrentService:
         with pytest.raises(TorrentClientError, match="не настроен"):
             service.send(seeded.releases.feed()[0])
 
+    def test_replaced_pack_is_removed_from_client(self, service, repos, client) -> None:
+        """Пачка «1-5» перекрывает «1-4»: старую раздачу убираем из клиента."""
+        anime_id = repos.anime.list()[0].id
+        repos.releases.add_many(
+            anime_id, [release("p14", 1, episode_end=4)], seen=False
+        )
+        old = repos.releases.feed()[0]
+        service.send(old)
+        old_hash = repos.releases.get(old.id).info_hash
+        assert old_hash
+
+        repos.releases.add_many(
+            anime_id, [release("p15", 1, episode_end=5)], seen=False
+        )
+        new = [r for r in repos.releases.feed() if r.external_id == "p15"][0]
+        service.send(new)
+
+        assert client.deleted == [([old_hash], False)]
+        # Хеш снят: раздачи в клиенте больше нет, опрашивать нечего.
+        assert not repos.releases.get(old.id).info_hash
+
+    def test_single_episode_does_not_delete_neighbours(self, service, repos, client) -> None:
+        """Обычная серия ничего не заменяет — удалять соседей нельзя."""
+        target = repos.releases.feed()[0]
+        service.send(target)
+        assert client.deleted == []
+
     def test_save_to_disk(self, service, repos, tmp_path) -> None:
         path = service.save_to(repos.releases.feed()[0], tmp_path / "out")
         assert path.exists() and path.suffix == ".torrent"
@@ -267,11 +380,14 @@ class TestTorrentService:
         assert not set(name) & set('<>:"/\\|?*')
         assert name.endswith(".torrent")
 
-    def test_download_state_refresh(self, service, repos, client) -> None:
+    @pytest.mark.parametrize("completed_state", ["pausedUP", "stoppedUP"])
+    def test_download_state_refresh(
+        self, service, repos, client, completed_state: str
+    ) -> None:
         target = repos.releases.feed()[0]
         service.send(target)
         stored = repos.releases.get(target.id)
-        client.states = {stored.info_hash.lower(): "stalledUP"}
+        client.states = {stored.info_hash.lower(): completed_state}
 
         assert service.refresh_download_states() == 1
         assert repos.releases.get(target.id).state == ReleaseState.DOWNLOADED

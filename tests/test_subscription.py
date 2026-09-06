@@ -67,6 +67,19 @@ def test_source_failure_propagates_and_saves_nothing(service, parser, repos) -> 
     assert repos.anime.list() == []
 
 
+def test_archive_failure_rolls_back_subscription(service, repos, monkeypatch) -> None:
+    def fail_import(*args, **kwargs):
+        raise RuntimeError("сбой импорта")
+
+    monkeypatch.setattr(repos.releases, "_add_many", fail_import)
+
+    with pytest.raises(RuntimeError, match="сбой импорта"):
+        service.add(URL)
+
+    assert repos.anime.list() == []
+    assert repos.history.recent() == []
+
+
 def test_auto_download_flag_persisted(service, repos) -> None:
     anime = service.add(URL, auto_download=True)
     assert repos.anime.get(anime.id).auto_download is True

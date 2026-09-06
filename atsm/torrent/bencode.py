@@ -20,50 +20,95 @@ def _decode(data: bytes, index: int) -> tuple[object, int]:
     char = data[index : index + 1]
 
     if char == b"i":
-        end = data.index(b"e", index)
-        return int(data[index + 1 : end]), end + 1
+        end = data.find(b"e", index + 1)
+        if end == -1:
+            raise BencodeError("Не завершено целое число")
+        raw = data[index + 1 : end]
+        try:
+            return int(raw), end + 1
+        except ValueError as exc:
+            raise BencodeError("Некорректное целое число") from exc
 
     if char == b"l":
         items: list = []
         index += 1
-        while data[index : index + 1] != b"e":
+        while True:
+            if index >= len(data):
+                raise BencodeError("Не завершён список")
+            if data[index : index + 1] == b"e":
+                return items, index + 1
             item, index = _decode(data, index)
             items.append(item)
-        return items, index + 1
 
     if char == b"d":
         result: dict = {}
         index += 1
-        while data[index : index + 1] != b"e":
+        while True:
+            if index >= len(data):
+                raise BencodeError("Не завершён словарь")
+            if data[index : index + 1] == b"e":
+                return result, index + 1
             key, index = _decode(data, index)
             value, index = _decode(data, index)
             result[key] = value
-        return result, index + 1
 
     if char.isdigit():
-        colon = data.index(b":", index)
-        length = int(data[index:colon])
+        colon = data.find(b":", index)
+        if colon == -1:
+            raise BencodeError("Не задана длина строки")
+        try:
+            length = int(data[index:colon])
+        except ValueError as exc:
+            raise BencodeError("Некорректная длина строки") from exc
         start = colon + 1
-        return data[start : start + length], start + length
+        end = start + length
+        if end > len(data):
+            raise BencodeError("Строка короче заявленной длины")
+        return data[start:end], end
 
     raise BencodeError(f"Недопустимый символ bencode: {char!r}")
 
 
 def decode(data: bytes) -> object:
-    value, _ = _decode(data, 0)
+    value, end = _decode(data, 0)
+    if end != len(data):
+        raise BencodeError("Лишние данные после bencode-значения")
     return value
 
 
 def info_hash(torrent_data: bytes) -> str:
     """SHA1 от bencode-словаря info — идентификатор раздачи в клиенте."""
     try:
-        decoded = decode(torrent_data)
-        if not isinstance(decoded, dict) or b"info" not in decoded:
+        if not torrent_data.startswith(b"d"):
+            raise BencodeError("Корневое значение торрента не является словарём")
+
+        index = 1
+        info_range: tuple[int, int] | None = None
+        while True:
+            if index >= len(torrent_data):
+                raise BencodeError("Не завершён корневой словарь")
+            if torrent_data[index : index + 1] == b"e":
+                index += 1
+                break
+
+            key, index = _decode(torrent_data, index)
+            if not isinstance(key, bytes):
+                raise BencodeError("Ключ словаря должен быть строкой")
+            value_start = index
+            _, index = _decode(torrent_data, index)
+            if key == b"info":
+                if info_range is not None:
+                    raise BencodeError("Секция info указана несколько раз")
+                info_range = (value_start, index)
+
+        if index != len(torrent_data):
+            raise BencodeError("Лишние данные после корневого словаря")
+        if info_range is None:
             raise BencodeError("В файле нет секции info")
-        # Пересобирать info нельзя: порядок ключей должен остаться исходным,
-        # поэтому вырезаем оригинальный срез байтов.
-        start = torrent_data.index(b"4:info") + len(b"4:info")
-        _, end = _decode(torrent_data, start)
+
+        start, end = info_range
         return hashlib.sha1(torrent_data[start:end]).hexdigest()
+    except BencodeError:
+        raise
     except (ValueError, IndexError, KeyError) as exc:
         raise BencodeError(f"Не удалось вычислить info_hash: {exc}") from exc

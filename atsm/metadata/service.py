@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import threading
 
 from loguru import logger
 
@@ -28,6 +29,7 @@ class MetadataService:
         self.repos = repos
         self.shikimori = shikimori or ShikimoriProvider()
         self.anilist = anilist or AniListProvider()
+        self._enrich_lock = threading.Lock()
 
     # --- поиск -----------------------------------------------------------
 
@@ -59,6 +61,10 @@ class MetadataService:
         Если shikimori_id не задан — берётся сохранённый ранее, иначе тайтл
         подбирается по названию подписки.
         """
+        with self._enrich_lock:
+            return self._enrich(anime_id, shikimori_id)
+
+    def _enrich(self, anime_id: int, shikimori_id: str | None = None) -> AnimeMetadata:
         anime = self.repos.anime.get(anime_id)
         if anime is None:
             raise MetadataError("Подписка не найдена")
@@ -76,8 +82,15 @@ class MetadataService:
 
         metadata = self.shikimori.fetch(external_id)
         anilist_id = self._add_anilist(metadata)
+        same_title = stored is not None and stored.get("shikimori_id") == external_id
+        preserve_existing = anilist_id is None and same_title
 
-        self.repos.metadata.save(anime_id, metadata, anilist_id=anilist_id)
+        self.repos.metadata.save(
+            anime_id,
+            metadata,
+            anilist_id=anilist_id,
+            preserve_existing=preserve_existing,
+        )
         return metadata
 
     def backfill_franchise(self) -> int:
@@ -101,7 +114,7 @@ class MetadataService:
                 logger.debug("Франшиза для подписки {} не получена: {}", anime_id, exc)
                 continue
 
-            self.repos.metadata.save(anime_id, metadata, anilist_id=(stored or {}).get("anilist_id"))
+            self.repos.metadata.update_franchise(anime_id, metadata.franchise)
             updated += 1
 
         if updated:

@@ -49,19 +49,8 @@ class SubscriptionService:
             raise SubscriptionExists(existing)
 
         info = parser.fetch(url)
-        anime_id = self.repos.anime.add(
-            title=info.title,
-            source=info.source,
-            url=info.url,
-            slug=info.slug,
-            auto_download=auto_download,
-        )
-        imported = self.repos.releases.add_many(anime_id, info.releases, seen=True)
-        self.repos.anime.mark_checked(anime_id, ok=True)
-        self.repos.history.log(
-            HistoryAction.CHECK,
-            f"Добавлена подписка, импортировано раздач: {imported}",
-            anime_id=anime_id,
+        anime_id, imported = self.repos.create_subscription(
+            info, auto_download=auto_download
         )
         logger.info("Добавлена подписка «{}» ({} раздач)", info.title, imported)
 

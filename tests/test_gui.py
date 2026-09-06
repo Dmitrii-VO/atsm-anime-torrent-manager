@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import os
+import threading
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest  # noqa: E402
 from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, Qt  # noqa: E402
 from PySide6.QtGui import QMouseEvent, QPixmap, QPainter  # noqa: E402
-from PySide6.QtWidgets import QStyleOptionViewItem  # noqa: E402
+from PySide6.QtWidgets import QApplication, QStyleOptionViewItem  # noqa: E402
 
 from atsm.app import bootstrap  # noqa: E402
 from atsm.core.models import ReleaseState  # noqa: E402
+from atsm.core.models import Anime  # noqa: E402
+from atsm.config import Settings  # noqa: E402
 from atsm.core.subscription_service import SubscriptionService  # noqa: E402
 from atsm.gui.feed_view import FeedView  # noqa: E402
 from atsm.gui.icons import app_icon  # noqa: E402
@@ -80,6 +83,32 @@ class TestFeedView:
         )
 
         with qtbot.waitSignal(view.download_requested, timeout=1000) as blocker:
+            view.delegate.editorEvent(event, view.model, option, index)
+        assert blocker.args[0].external_id == "3"
+
+    def test_seen_button_click_emits_release(self, qtbot, seeded_ctx) -> None:
+        """«Просмотрено» в карточке убирает одну серию из ленты (клик по делегату)."""
+        view = FeedView()
+        qtbot.addWidget(view)
+        view.resize(900, 400)
+        view.set_releases(seeded_ctx.repos.releases.feed())
+
+        index = view.model.index(0, 0)
+        rect = view.list.visualRect(index)
+        card = view.delegate._card_rect(rect)
+        center = view.delegate._seen_rect(card).center()
+
+        option = QStyleOptionViewItem()
+        option.rect = rect
+        event = QMouseEvent(
+            QEvent.Type.MouseButtonRelease,
+            QPointF(center),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+
+        with qtbot.waitSignal(view.release_seen_requested, timeout=1000) as blocker:
             view.delegate.editorEvent(event, view.model, option, index)
         assert blocker.args[0].external_id == "3"
 
@@ -207,6 +236,27 @@ class TestLibraryView:
         assert statuses[0] == "Новая"          # вышла после подписки
         assert statuses[1:] == ["В архиве", "В архиве"]
 
+    def test_merged_check_and_mark_seen_use_all_ids(self, qtbot) -> None:
+        view = LibraryView()
+        qtbot.addWidget(view)
+        animes = [
+            Anime(1, "Тайтл", "astar", "https://astar/1", "1", shikimori_id="42"),
+            Anime(2, "Тайтл", "anilibria", "https://anilibria/2", "2", shikimori_id="42"),
+        ]
+        view.set_anime(animes)
+        view.anime_list.setCurrentIndex(view.anime_model.index(0, 0))
+
+        checked = []
+        seen = []
+        view.check_requested.connect(checked.append)
+        view.mark_seen_requested.connect(seen.append)
+        view.check_button.click()
+        view._request_mark_seen(view.current_entry())
+
+        assert [anime.id for anime in checked[0]] == [1, 2]
+        assert seen == [[1, 2]]
+        assert view._remove_action_text(animes[0]) == "Удалить подписку источника «astar»"
+
 
 class TestModels:
     def test_anime_tooltip(self, seeded_ctx) -> None:
@@ -321,6 +371,42 @@ class TestAddDialog:
         assert "все зеркала молчат" in dialog.status.text()
 
 
+class TestSettingsDialog:
+    def test_connection_uses_draft_and_cancel_keeps_settings(self, qtbot) -> None:
+        from atsm.gui.dialogs import SettingsDialog
+
+        settings = Settings()
+        tested = []
+
+        class Client:
+            def test_connection(self):
+                return "5.0"
+
+        dialog = SettingsDialog(settings, lambda draft: tested.append(draft) or Client())
+        qtbot.addWidget(dialog)
+        dialog.host.setText("draft.local")
+        dialog._test_connection()
+        qtbot.waitUntil(lambda: bool(tested) and dialog.test_button.isEnabled(), timeout=3000)
+        dialog.reject()
+
+        assert tested[0].qbittorrent.host == "draft.local"
+        assert settings.qbittorrent.host == "127.0.0.1"
+
+    def test_save_applies_deep_draft(self, qtbot) -> None:
+        from atsm.gui.dialogs import SettingsDialog
+
+        settings = Settings()
+        original_qbt = settings.qbittorrent
+        dialog = SettingsDialog(settings, lambda draft: None)
+        qtbot.addWidget(dialog)
+        dialog.host.setText("saved.local")
+        dialog._save()
+
+        assert dialog.result() == dialog.DialogCode.Accepted
+        assert settings.qbittorrent.host == "saved.local"
+        assert settings.qbittorrent is not original_qbt
+
+
 class TestSourceDiagnostics:
     """ТЗ §21: пользователь должен понимать, почему новых серий нет."""
 
@@ -400,6 +486,26 @@ class TestFiltersAndActions:
         assert repos.releases.get(target.id).is_seen is False
         assert repos.releases.get(target.id).state == ReleaseState.NEW
         assert window.feed.model.rowCount() == 1
+        window.scheduler.shutdown()
+
+    def test_mark_seen_for_merged_ids_updates_both_sources(self, qtbot, seeded_ctx) -> None:
+        from atsm.gui.main_window import MainWindow
+
+        repos = seeded_ctx.repos
+        first_id = repos.anime.list()[0].id
+        second_id = repos.anime.add(
+            title="Пожиратель звёзд",
+            source="other",
+            url="https://other.test/title",
+            slug="title",
+        )
+        repos.releases.add_many(second_id, [release("other-1", 3)], seen=False)
+        window = MainWindow(seeded_ctx)
+        qtbot.addWidget(window)
+
+        window.mark_seen([first_id, second_id])
+
+        assert repos.releases.feed() == []
         window.scheduler.shutdown()
 
 
@@ -525,6 +631,82 @@ class TestWorkers:
         assert window.check_all_button.isEnabled()
         assert "справочник недоступен" in window.status_label.full_text()
         window.scheduler.shutdown()
+
+    def test_shutdown_waits_own_pool_disables_callbacks_and_new_tasks(self, qtbot) -> None:
+        from PySide6.QtCore import QThreadPool
+
+        from atsm.gui.workers import WorkerRunner
+
+        runner = WorkerRunner()
+        started = threading.Event()
+        release_task = threading.Event()
+        callbacks = []
+
+        def task():
+            started.set()
+            release_task.wait(3)
+            return 1
+
+        runner.start(task, on_done=callbacks.append)
+        assert started.wait(1)
+        threading.Timer(0.05, release_task.set).start()
+        assert runner.shutdown() is True
+        QApplication.processEvents()
+
+        assert callbacks == []
+        assert runner.active_count == 0
+        assert runner.pool is not QThreadPool.globalInstance()
+        with pytest.raises(RuntimeError, match="после shutdown"):
+            runner.start(lambda: None)
+
+
+class TestShutdown:
+    @pytest.mark.parametrize(
+        ("minimize_to_tray", "tray_available"),
+        [(False, True), (True, False)],
+    )
+    def test_close_quits_when_window_cannot_safely_hide(
+        self, qtbot, seeded_ctx, monkeypatch, minimize_to_tray, tray_available
+    ) -> None:
+        from atsm.gui.main_window import MainWindow
+
+        seeded_ctx.settings.minimize_to_tray = minimize_to_tray
+        window = MainWindow(seeded_ctx, tray_available=tray_available)
+        qtbot.addWidget(window)
+        calls = []
+        monkeypatch.setattr(window, "_shutdown", lambda: calls.append("shutdown"))
+        monkeypatch.setattr(QApplication, "quit", lambda: calls.append("quit"))
+
+        class Event:
+            accepted = False
+
+            def accept(self):
+                self.accepted = True
+
+            def ignore(self):
+                raise AssertionError("Окно не должно скрываться")
+
+        event = Event()
+        window.closeEvent(event)
+
+        assert event.accepted
+        assert calls == ["shutdown", "quit"]
+        window.scheduler.shutdown()
+
+    def test_shutdown_waits_workers_before_database(self, qtbot, seeded_ctx, monkeypatch) -> None:
+        from atsm.gui.main_window import MainWindow
+
+        window = MainWindow(seeded_ctx, tray_available=False)
+        qtbot.addWidget(window)
+        order = []
+        monkeypatch.setattr(window.scheduler, "shutdown", lambda: order.append("scheduler"))
+        monkeypatch.setattr(window.workers, "shutdown", lambda: order.append("workers"))
+        monkeypatch.setattr(window.tray, "hide", lambda: order.append("tray"))
+        monkeypatch.setattr(type(window.ctx), "shutdown", lambda _self: order.append("database"))
+
+        window._shutdown()
+
+        assert order == ["scheduler", "workers", "tray", "database"]
 
 
 class TestAutofetchMetadata:

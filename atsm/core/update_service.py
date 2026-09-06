@@ -71,8 +71,8 @@ class UpdateService:
         known = self.repos.releases.known_external_ids(anime.id)
         fresh = [r for r in info.releases if r.external_id not in known]
 
-        # Сиды/личи меняются постоянно — обновляем и у известных раздач.
-        self.repos.releases.update_stats(
+        # Адрес зеркала и метаданные тоже меняются — обновляем все внешние поля.
+        self.repos.releases.update_from_source(
             anime.id, [r for r in info.releases if r.external_id in known]
         )
 

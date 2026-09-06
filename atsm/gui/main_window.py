@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QStatusBar,
+    QSystemTrayIcon,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -53,12 +54,16 @@ from .workers import WorkerRunner
 class MainWindow(QMainWindow):
     scheduled_check = Signal()
 
-    def __init__(self, ctx: AppContext) -> None:
+    def __init__(self, ctx: AppContext, tray_available: bool | None = None) -> None:
         super().__init__()
         self.ctx = ctx
         self.workers = WorkerRunner()
         self._force_quit = False
         self._busy = False
+        self._shutting_down = False
+        self._tray_available = (
+            QSystemTrayIcon.isSystemTrayAvailable() if tray_available is None else tray_available
+        )
 
         self.registry = ParserRegistry(ctx.settings)
         self.repos = ctx.repos
@@ -140,7 +145,8 @@ class MainWindow(QMainWindow):
 
     def _build_tray(self) -> None:
         self.tray = Tray(self)
-        self.tray.show()
+        if self._tray_available:
+            self.tray.show()
         self.tray.check_requested.connect(self.check_all)
         self.tray.download_all_requested.connect(self.download_all)
         self.tray.show_requested.connect(self.show_window)
@@ -156,6 +162,7 @@ class MainWindow(QMainWindow):
         self.feed.download_requested.connect(self.send_release)
         self.feed.download_all_requested.connect(self.download_all)
         self.feed.mark_seen_requested.connect(self.mark_seen)
+        self.feed.release_seen_requested.connect(self.mark_release_seen)
         self.feed.open_anime_requested.connect(self.open_anime)
 
         self.library.check_requested.connect(self.check_anime)
@@ -183,8 +190,8 @@ class MainWindow(QMainWindow):
 
         self.scheduled_check.connect(self.check_all)
 
-    def _make_client(self) -> QBittorrentClient:
-        return QBittorrentClient(self.ctx.settings.qbittorrent)
+    def _make_client(self, settings=None) -> QBittorrentClient:
+        return QBittorrentClient((settings or self.ctx.settings).qbittorrent)
 
     def _backfill_metadata(self) -> None:
         """Разовая дозагрузка недостающих полей справки — тихо, в фоне."""
@@ -240,6 +247,8 @@ class MainWindow(QMainWindow):
             self.status_label.setText(message)
 
     def _run(self, fn, on_done, *args, busy_message: str = "", **kwargs) -> None:
+        if self._shutting_down:
+            return
         self._set_busy(True, busy_message)
         self.workers.start(fn, *args, on_done=on_done, on_failed=self._on_failure, **kwargs)
 
@@ -312,7 +321,12 @@ class MainWindow(QMainWindow):
         )
 
     def remove_anime(self, anime: Anime) -> None:
-        if not confirm(self, "Удалить подписку", f"Удалить «{anime.title}» вместе с историей?"):
+        if not confirm(
+            self,
+            f"Удалить подписку источника «{anime.source}»",
+            f"Удалить «{anime.title}» из источника «{anime.source}» вместе с историей?\n"
+            f"{anime.url}",
+        ):
             return
         self.subscriptions.remove(anime.id)
         self.refresh_all()
@@ -347,13 +361,15 @@ class MainWindow(QMainWindow):
             return
         self._run(self.updates.check_all, self._on_check_done, busy_message="Проверяем подписки…")
 
-    def check_anime(self, anime: Anime | None) -> None:
+    def check_anime(self, anime: Anime | list[Anime] | None) -> None:
         if anime is None or self._busy:
             return
+        animes = anime if isinstance(anime, list) else [anime]
+        title = animes[0].title
         self._run(
-            lambda: self.updates.check_all([anime]),
+            lambda: self.updates.check_all(animes),
             self._on_check_done,
-            busy_message=f"Проверяем «{anime.title}»…",
+            busy_message=f"Проверяем «{title}»…",
         )
 
     def _on_check_done(self, summary: CheckSummary) -> None:
@@ -514,10 +530,20 @@ class MainWindow(QMainWindow):
         if dialog.exec() == TitlePickerDialog.DialogCode.Accepted and dialog.selected:
             self.refresh_metadata(anime, dialog.selected.external_id)
 
-    def mark_seen(self, anime_id: int | None) -> None:
-        self.repos.releases.mark_all_seen(anime_id)
+    def mark_seen(self, anime_id: int | list[int] | None) -> None:
+        if isinstance(anime_id, list):
+            releases = self.repos.releases.list_for_anime_ids(anime_id)
+            self.repos.releases.mark_seen([release.id for release in releases])
+        else:
+            self.repos.releases.mark_all_seen(anime_id)
         self.refresh_all()
         self.status_label.setText("Отмечено как просмотренное")
+
+    def mark_release_seen(self, release: Release) -> None:
+        """Убирает одну серию из ленты, чтобы «Скачать всё» взяло только нужное."""
+        self.repos.releases.mark_seen([release.id])
+        self.refresh_all()
+        self.status_label.setText(f"{release.episode_label} — просмотрено")
 
     def _copy(self, text: str | None, message: str) -> None:
         if not text:
@@ -574,9 +600,14 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # noqa: N802
         """Закрытие окна не завершает работу — приложение живёт в трее (ТЗ §16)."""
-        if self._force_quit or not self.ctx.settings.minimize_to_tray:
+        if (
+            self._force_quit
+            or not self.ctx.settings.minimize_to_tray
+            or not self._tray_available
+        ):
             self._shutdown()
             event.accept()
+            QApplication.quit()
             return
 
         event.ignore()
@@ -591,7 +622,10 @@ class MainWindow(QMainWindow):
         QApplication.quit()
 
     def _shutdown(self) -> None:
-        self.workers.clear()
+        if self._shutting_down:
+            return
+        self._shutting_down = True
         self.scheduler.shutdown()
+        self.workers.shutdown()
         self.tray.hide()
         self.ctx.shutdown()

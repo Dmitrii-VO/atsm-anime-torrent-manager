@@ -343,7 +343,7 @@ class LibraryView(QWidget):
 
         actions = QHBoxLayout()
         self.check_button = QPushButton("Проверить")
-        self.check_button.clicked.connect(lambda: self.check_requested.emit(self._current))
+        self.check_button.clicked.connect(self._request_check)
         actions.addWidget(self.check_button)
 
         self.open_page_button = QPushButton("Открыть страницу")
@@ -623,6 +623,15 @@ class LibraryView(QWidget):
         if release:
             self.send_requested.emit(release)
 
+    def _request_check(self) -> None:
+        entry = self._current_entry
+        if entry is None:
+            return
+        self.check_requested.emit(entry.animes if entry.is_merged else entry.primary)
+
+    def _request_mark_seen(self, entry: LibraryEntry) -> None:
+        self.mark_seen_requested.emit(entry.ids if entry.is_merged else entry.primary.id)
+
     # --- контекстные меню -------------------------------------------------
 
     def _anime_menu(self, position: QPoint) -> None:
@@ -634,11 +643,13 @@ class LibraryView(QWidget):
 
         menu = QMenu(self)
         check = QAction("Проверить обновления", menu)
-        check.triggered.connect(lambda: self.check_requested.emit(anime))
+        check.triggered.connect(
+            lambda: self.check_requested.emit(entry.animes if entry.is_merged else anime)
+        )
         menu.addAction(check)
 
         seen = QAction("Пометить все просмотренными", menu)
-        seen.triggered.connect(lambda: self.mark_seen_requested.emit(anime.id))
+        seen.triggered.connect(lambda: self._request_mark_seen(entry))
         menu.addAction(seen)
 
         favorite = QAction(
@@ -650,10 +661,14 @@ class LibraryView(QWidget):
         menu.addAction(favorite)
         menu.addSeparator()
 
-        remove = QAction("Удалить подписку", menu)
+        remove = QAction(self._remove_action_text(anime), menu)
         remove.triggered.connect(lambda: self.remove_requested.emit(anime))
         menu.addAction(remove)
         menu.exec(self.anime_list.viewport().mapToGlobal(position))
+
+    @staticmethod
+    def _remove_action_text(anime: Anime) -> str:
+        return f"Удалить подписку источника «{anime.source}»"
 
     def _release_menu(self, position: QPoint) -> None:
         index = self.releases.indexAt(position)

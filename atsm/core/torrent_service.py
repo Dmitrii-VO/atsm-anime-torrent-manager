@@ -88,6 +88,7 @@ class TorrentService:
             release_id=release.id,
         )
         logger.info("«{}» {} → торрент-клиент", release.anime_title, release.episode_label)
+        self._drop_replaced(release)
         return True
 
     def send_many(self, releases: list[Release]) -> tuple[int, list[str]]:
@@ -143,10 +144,54 @@ class TorrentService:
         updated = 0
         for release in pending:
             state = states.get((release.info_hash or "").lower())
-            if state in {"uploading", "stalledUP", "pausedUP", "queuedUP", "forcedUP"}:
+            if state in {
+                "uploading",
+                "stalledUP",
+                "pausedUP",
+                "stoppedUP",
+                "queuedUP",
+                "forcedUP",
+            }:
                 self.repos.releases.set_state(release.id, ReleaseState.DOWNLOADED, "Скачана")
                 updated += 1
         return updated
+
+    def _drop_replaced(self, release: Release) -> None:
+        """Убирает из клиента пачки, которые новая раздача перекрыла целиком.
+
+        AniLiberty обновляет раздачу на месте: «1-4» становится «1-5» с новым
+        хешем. Без этого в клиенте копятся дубликаты уже скачанных серий.
+        """
+        settings = getattr(self.client, "settings", None)
+        if not getattr(settings, "delete_replaced", False) or not hasattr(self.client, "delete"):
+            return
+
+        replaced = [
+            old
+            for old in self.repos.releases.list_for_anime(release.anime_id)
+            if old.id != release.id and old.info_hash and _covers(release, old)
+        ]
+        if not replaced:
+            return
+
+        try:
+            self.client.delete([old.info_hash for old in replaced])
+        except TorrentClientError as exc:
+            # Не повод рушить успешную отправку: дубликат переживём.
+            logger.debug("Старые раздачи не удалены: {}", exc)
+            return
+
+        for old in replaced:
+            # Хеш больше ни о чём не спросишь — раздачи в клиенте нет.
+            self.repos.releases.set_info_hash(old.id, "")
+            self.repos.history.log(
+                HistoryAction.SENT,
+                f"{old.episode_label} заменена на {release.episode_label}, "
+                "старая раздача убрана из клиента",
+                anime_id=old.anime_id,
+                release_id=old.id,
+            )
+        logger.info("Заменено пачек: {} → {}", len(replaced), release.episode_label)
 
     # --- служебное -------------------------------------------------------
 
@@ -176,6 +221,17 @@ class TorrentService:
         if anime is None:
             raise ParserError("Подписка не найдена")
         return anime.source
+
+
+def _covers(new: Release, old: Release) -> bool:
+    """Диапазон серий старой раздачи целиком лежит внутри новой."""
+    if new.episode is None or old.episode is None:
+        return False
+    new_end = new.episode_end or new.episode
+    old_end = old.episode_end or old.episode
+    if (new.episode, new_end) == (old.episode, old_end):
+        return False  # та же серия, перезалитая заново — не замена пачки
+    return new.episode <= old.episode and old_end <= new_end
 
 
 def _as_release_info(release: Release):

@@ -94,9 +94,9 @@ class TestReleaseRepo:
         repos.releases.add_many(anime_id, [make_release("7", 7), make_release("8", 8)], seen=True)
         assert repos.releases.known_external_ids(anime_id) == {"7", "8"}
 
-    def test_stats_refresh(self, repos: Repositories, anime_id: int) -> None:
+    def test_source_fields_refresh(self, repos: Repositories, anime_id: int) -> None:
         repos.releases.add_many(anime_id, [make_release("1", 1, seeders=5)], seen=True)
-        repos.releases.update_stats(anime_id, [make_release("1", 1, seeders=99)])
+        repos.releases.update_from_source(anime_id, [make_release("1", 1, seeders=99)])
         assert repos.releases.list_for_anime(anime_id)[0].seeders == 99
 
     def test_sorting_puts_unnumbered_last(self, repos: Repositories, anime_id: int) -> None:

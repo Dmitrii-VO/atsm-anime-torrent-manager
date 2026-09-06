@@ -13,7 +13,7 @@ import threading
 from contextlib import contextmanager
 from importlib import resources
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 from loguru import logger
 
@@ -58,7 +58,7 @@ _MIGRATION_004 = "ALTER TABLE anime_metadata ADD COLUMN franchise TEXT;"
 
 # Миграции применяются по порядку; версия N приводит схему к состоянию N.
 # Новая версия — новая запись здесь, ничего существующего не меняем.
-MIGRATIONS: dict[int, callable] = {
+MIGRATIONS: dict[int, Callable[[], str]] = {
     1: _load_initial_schema,
     2: lambda: _MIGRATION_002,
     3: lambda: _MIGRATION_003,
@@ -155,13 +155,30 @@ class Database:
             logger.debug("Схема БД актуальна (версия {})", version)
             return version
 
-        with self.transaction() as conn:
-            conn.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
-            for target in range(version + 1, SCHEMA_VERSION + 1):
-                logger.info("Применяется миграция БД до версии {}", target)
-                conn.executescript(MIGRATIONS[target]())
-            conn.execute("DELETE FROM schema_version")
-            conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
+        statements = [
+            "BEGIN IMMEDIATE;",
+            "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);",
+        ]
+        for target in range(version + 1, SCHEMA_VERSION + 1):
+            logger.info("Применяется миграция БД до версии {}", target)
+            statements.append(MIGRATIONS[target]())
+        statements.extend(
+            (
+                "DELETE FROM schema_version;",
+                f"INSERT INTO schema_version (version) VALUES ({SCHEMA_VERSION});",
+                "COMMIT;",
+            )
+        )
+
+        # executescript сам завершает внешнюю транзакцию. Поэтому BEGIN/COMMIT
+        # входят в тот же скрипт, что DDL и запись версии схемы.
+        with self._lock:
+            conn = self.conn
+            try:
+                conn.executescript("\n".join(statements))
+            except Exception:
+                conn.rollback()
+                raise
 
         logger.info("Схема БД: версия {} → {}", version, SCHEMA_VERSION)
         return SCHEMA_VERSION

@@ -13,7 +13,7 @@ from ..core.models import (
     ReleaseState,
     SourceState,
 )
-from ..parsers.base import ReleaseInfo
+from ..parsers.base import AnimeInfo, ReleaseInfo
 from .database import Database
 
 
@@ -91,13 +91,35 @@ class AnimeRepository:
         auto_download: bool = False,
     ) -> int:
         with self.db.transaction() as conn:
-            cursor = conn.execute(
-                """INSERT INTO anime (title, source, url, slug, poster_path, auto_download,
-                                      created_at)
-                   VALUES (?,?,?,?,?,?,?)""",
-                (title, source, url, slug, poster_path, int(auto_download), _now()),
+            return self._add(
+                conn,
+                title=title,
+                source=source,
+                url=url,
+                slug=slug,
+                poster_path=poster_path,
+                auto_download=auto_download,
             )
-            return int(cursor.lastrowid)
+
+    @staticmethod
+    def _add(
+        conn: sqlite3.Connection,
+        *,
+        title: str,
+        source: str,
+        url: str,
+        slug: str,
+        poster_path: str | None = None,
+        auto_download: bool = False,
+    ) -> int:
+        cursor = conn.execute(
+            """INSERT INTO anime (title, source, url, slug, poster_path, auto_download,
+                                  created_at)
+               VALUES (?,?,?,?,?,?,?)""",
+            (title, source, url, slug, poster_path, int(auto_download), _now()),
+        )
+        assert cursor.lastrowid is not None
+        return int(cursor.lastrowid)
 
     def delete(self, anime_id: int) -> None:
         with self.db.transaction() as conn:
@@ -120,11 +142,17 @@ class AnimeRepository:
 
     def mark_checked(self, anime_id: int, ok: bool, error: str | None = None) -> None:
         with self.db.transaction() as conn:
-            conn.execute(
-                "UPDATE anime SET last_check_at = ?, last_check_ok = ?, last_error = ?"
-                " WHERE id = ?",
-                (_now(), int(ok), error, anime_id),
-            )
+            self._mark_checked(conn, anime_id, ok, error)
+
+    @staticmethod
+    def _mark_checked(
+        conn: sqlite3.Connection, anime_id: int, ok: bool, error: str | None = None
+    ) -> None:
+        conn.execute(
+            "UPDATE anime SET last_check_at = ?, last_check_ok = ?, last_error = ?"
+            " WHERE id = ?",
+            (_now(), int(ok), error, anime_id),
+        )
 
 
 class ReleaseRepository:
@@ -166,49 +194,79 @@ class ReleaseRepository:
         """Вставляет раздачи. seen=True — первичный импорт архива (ТЗ §5)."""
         if not releases:
             return 0
-        now = _now()
-        rows = [
-            (
-                anime_id,
-                r.external_id,
-                r.episode,
-                r.episode_end,
-                r.episode_raw,
-                r.title,
-                r.quality,
-                r.size_bytes,
-                r.seeders,
-                r.leechers,
-                r.downloads,
-                r.published_at.isoformat() if r.published_at else None,
-                r.torrent_url,
-                r.magnet,
-                int(seen),
-                now,
-            )
-            for r in releases
-        ]
         with self.db.transaction() as conn:
-            conn.executemany(
-                """INSERT OR IGNORE INTO release
-                   (anime_id, external_id, episode, episode_end, episode_raw, title, quality,
-                    size_bytes, seeders, leechers, downloads, published_at, torrent_url, magnet,
-                    is_seen, first_seen_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                rows,
-            )
-        return len(rows)
+            return self._add_many(conn, anime_id, releases, seen=seen)
 
-    def update_stats(self, anime_id: int, releases: list[ReleaseInfo]) -> None:
-        """Обновляет сиды/личи у уже известных раздач — цифры живут своей жизнью."""
+    @staticmethod
+    def _add_many(
+        conn: sqlite3.Connection,
+        anime_id: int,
+        releases: list[ReleaseInfo],
+        *,
+        seen: bool,
+    ) -> int:
+        if not releases:
+            return 0
+        now = _now()
+        before = conn.total_changes
+        conn.executemany(
+            """INSERT OR IGNORE INTO release
+               (anime_id, external_id, episode, episode_end, episode_raw, title, quality,
+                size_bytes, seeders, leechers, downloads, published_at, torrent_url, magnet,
+                is_seen, first_seen_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            [
+                (
+                    anime_id,
+                    r.external_id,
+                    r.episode,
+                    r.episode_end,
+                    r.episode_raw,
+                    r.title,
+                    r.quality,
+                    r.size_bytes,
+                    r.seeders,
+                    r.leechers,
+                    r.downloads,
+                    r.published_at.isoformat() if r.published_at else None,
+                    r.torrent_url,
+                    r.magnet,
+                    int(seen),
+                    now,
+                )
+                for r in releases
+            ],
+        )
+        return conn.total_changes - before
+
+    def update_from_source(self, anime_id: int, releases: list[ReleaseInfo]) -> None:
+        """Обновляет внешние данные известных раздач, сохраняя локальное состояние."""
         if not releases:
             return
         with self.db.transaction() as conn:
             conn.executemany(
-                """UPDATE release SET seeders = ?, leechers = ?, downloads = ?
+                """UPDATE release SET episode = ?, episode_end = ?, episode_raw = ?, title = ?,
+                       quality = ?, size_bytes = ?, seeders = ?, leechers = ?, downloads = ?,
+                       published_at = ?, torrent_url = ?, magnet = ?, updated_at = ?
                     WHERE anime_id = ? AND external_id = ?""",
                 [
-                    (r.seeders, r.leechers, r.downloads, anime_id, r.external_id)
+                    (
+                        r.episode,
+                        r.episode_end,
+                        r.episode_raw,
+                        r.title,
+                        r.quality,
+                        r.size_bytes,
+                        r.seeders,
+                        r.leechers,
+                        r.downloads,
+                        r.published_at.isoformat() if r.published_at else None,
+                        r.torrent_url,
+                        r.magnet,
+                        _now(),
+                        anime_id,
+                        r.external_id,
+                    )
                     for r in releases
                 ],
             )
@@ -315,11 +373,28 @@ class HistoryRepository:
         release_id: int | None = None,
     ) -> None:
         with self.db.transaction() as conn:
-            conn.execute(
-                "INSERT INTO history (anime_id, release_id, action, message, created_at)"
-                " VALUES (?,?,?,?,?)",
-                (anime_id, release_id, str(action), message, _now()),
+            self._log(
+                conn,
+                action,
+                message,
+                anime_id=anime_id,
+                release_id=release_id,
             )
+
+    @staticmethod
+    def _log(
+        conn: sqlite3.Connection,
+        action: HistoryAction | str,
+        message: str | None = None,
+        *,
+        anime_id: int | None = None,
+        release_id: int | None = None,
+    ) -> None:
+        conn.execute(
+            "INSERT INTO history (anime_id, release_id, action, message, created_at)"
+            " VALUES (?,?,?,?,?)",
+            (anime_id, release_id, str(action), message, _now()),
+        )
 
     def recent(self, limit: int = 200) -> list[HistoryEntry]:
         rows = self.db.query(
@@ -393,7 +468,14 @@ class MetadataRepository:
         data["genres"] = [g for g in (data.get("genres") or "").split(",") if g]
         return data
 
-    def save(self, anime_id: int, metadata, anilist_id: str | None = None) -> None:
+    def save(
+        self,
+        anime_id: int,
+        metadata,
+        anilist_id: str | None = None,
+        *,
+        preserve_existing: bool = False,
+    ) -> None:
         values = {
             "shikimori_id": metadata.external_id if metadata.provider == "shikimori" else None,
             "anilist_id": anilist_id,
@@ -416,9 +498,29 @@ class MetadataRepository:
             # Пустая строка означает «проверено, франшизы нет»; NULL — «ещё не спрашивали».
             "franchise": metadata.franchise or "",
         }
+        if preserve_existing:
+            anilist_fields = {"anilist_id", "next_episode_number", "next_episode_at"}
+            expressions = []
+            for name in self.FIELDS:
+                if name in anilist_fields:
+                    condition = (
+                        "anime_metadata.shikimori_id = excluded.shikimori_id "
+                        "AND anime_metadata.anilist_id IS NOT NULL"
+                    )
+                else:
+                    condition = (
+                        "anime_metadata.shikimori_id = excluded.shikimori_id "
+                        f"AND (excluded.{name} IS NULL OR excluded.{name} = '')"
+                    )
+                expressions.append(
+                    f"{name} = CASE WHEN {condition} "
+                    f"THEN anime_metadata.{name} ELSE excluded.{name} END"
+                )
+            updates = ", ".join(expressions)
+        else:
+            updates = ", ".join(f"{name} = excluded.{name}" for name in self.FIELDS)
         columns = ", ".join(self.FIELDS)
         placeholders = ", ".join("?" * len(self.FIELDS))
-        updates = ", ".join(f"{name} = excluded.{name}" for name in self.FIELDS)
 
         with self.db.transaction() as conn:
             conn.execute(
@@ -426,6 +528,14 @@ class MetadataRepository:
                     VALUES (?, {placeholders}, ?)
                     ON CONFLICT(anime_id) DO UPDATE SET {updates}, updated_at = excluded.updated_at""",
                 (anime_id, *(values[name] for name in self.FIELDS), _now()),
+            )
+
+    def update_franchise(self, anime_id: int, franchise: str | None) -> None:
+        """Обновляет только франшизу, не перезаписывая остальные справочные данные."""
+        with self.db.transaction() as conn:
+            conn.execute(
+                "UPDATE anime_metadata SET franchise = ?, updated_at = ? WHERE anime_id = ?",
+                (franchise or "", _now(), anime_id),
             )
 
     def delete(self, anime_id: int) -> None:
@@ -455,3 +565,24 @@ class Repositories:
         self.history = HistoryRepository(db)
         self.sources = SourceStatusRepository(db)
         self.metadata = MetadataRepository(db)
+
+    def create_subscription(self, info: AnimeInfo, *, auto_download: bool = False) -> tuple[int, int]:
+        """Атомарно создаёт подписку вместе с архивом и записью истории."""
+        with self.db.transaction() as conn:
+            anime_id = self.anime._add(
+                conn,
+                title=info.title,
+                source=info.source,
+                url=info.url,
+                slug=info.slug,
+                auto_download=auto_download,
+            )
+            imported = self.releases._add_many(conn, anime_id, info.releases, seen=True)
+            self.anime._mark_checked(conn, anime_id, ok=True)
+            self.history._log(
+                conn,
+                HistoryAction.CHECK,
+                f"Добавлена подписка, импортировано раздач: {imported}",
+                anime_id=anime_id,
+            )
+        return anime_id, imported

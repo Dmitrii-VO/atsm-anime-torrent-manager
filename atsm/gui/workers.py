@@ -57,8 +57,10 @@ class WorkerRunner:
     """
 
     def __init__(self, pool: QThreadPool | None = None) -> None:
-        self.pool = pool or QThreadPool.globalInstance()
+        # Собственный пул позволяет дождаться только наших задач перед закрытием БД.
+        self.pool = pool or QThreadPool()
         self._active: set[Worker] = set()
+        self._accepting = True
 
     def start(
         self,
@@ -68,17 +70,17 @@ class WorkerRunner:
         on_failed: Callable | None = None,
         **kwargs,
     ) -> Worker:
+        if not self._accepting:
+            raise RuntimeError("Запуск фоновых задач после shutdown запрещён")
         worker = Worker(fn, *args, **kwargs)
         self._active.add(worker)
 
-        if on_done is not None:
-            worker.signals.finished.connect(on_done)
-        if on_failed is not None:
-            worker.signals.failed.connect(on_failed)
-
-        # Освобождаем ссылку уже в главном потоке, после доставки результата.
-        worker.signals.finished.connect(lambda *_: self._release(worker))
-        worker.signals.failed.connect(lambda *_: self._release(worker))
+        worker.signals.finished.connect(
+            lambda result: self._finish(worker, on_done, result)
+        )
+        worker.signals.failed.connect(
+            lambda error: self._finish(worker, on_failed, error)
+        )
 
         self.pool.start(worker)
         return worker
@@ -86,19 +88,34 @@ class WorkerRunner:
     def _release(self, worker: Worker) -> None:
         self._active.discard(worker)
 
-    def clear(self) -> None:
-        """Отключает обработчики незавершённых задач.
+    def _finish(self, worker: Worker, callback: Callable | None, value: object) -> None:
+        # Освобождение и callback идут одним queued-вызовом: наблюдатель результата
+        # уже не увидит завершённый Worker в active.
+        self._release(worker)
+        if self._accepting and callback is not None:
+            callback(value)
+
+    def shutdown(self, timeout_ms: int = -1) -> bool:
+        """Запрещает новые задачи, отключает колбэки и ждёт свой пул.
 
         Вызывается при закрытии приложения: результат, доставленный после
         уничтожения окна, иначе падает с «Signal source has been deleted».
         """
+        self._accepting = False
         for worker in tuple(self._active):
             for signal in (worker.signals.finished, worker.signals.failed):
                 try:
                     signal.disconnect()
                 except RuntimeError:
                     pass
-        self._active.clear()
+        finished = self.pool.waitForDone(timeout_ms)
+        if finished:
+            self._active.clear()
+        return finished
+
+    def clear(self) -> None:
+        """Совместимый алиас полного завершения управляемого пула."""
+        self.shutdown()
 
     @property
     def active_count(self) -> int:
