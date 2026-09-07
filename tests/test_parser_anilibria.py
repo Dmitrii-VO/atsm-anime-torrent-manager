@@ -156,9 +156,9 @@ class TestUrls:
         assert registry.for_url(PAGE_URL).name == "anilibria"
         assert registry.for_url("https://v19.astar.bz/7788-x.html").name == "astar"
 
-    def test_both_sources_registered(self) -> None:
+    def test_all_sources_registered(self) -> None:
         names = {p.name for p in ParserRegistry(Settings()).all()}
-        assert names == {"astar", "anilibria"}
+        assert names == {"astar", "anilibria", "rutracker"}
 
 
 def test_range_parsing(parser: AniLibriaParser) -> None:

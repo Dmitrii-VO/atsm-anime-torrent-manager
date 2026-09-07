@@ -98,6 +98,15 @@ class SourceSettings(BaseModel):
     astar_host: str = DEFAULT_ASTAR_MIRRORS[0]
     astar_mirrors: list[str] = Field(default_factory=lambda: list(DEFAULT_ASTAR_MIRRORS))
 
+    # RuTracker закрыт Cloudflare: приложение ходит сессией, которую пользователь
+    # открыл в браузере сам. Куки в settings.json не пишутся — они в хранилище
+    # Windows, как и пароль qBittorrent.
+    rutracker_host: str = "rutracker.org"
+    rutracker_cookies: str = ""
+    # cf_clearance привязан к User-Agent, поэтому UA обязан совпадать с браузерным.
+    rutracker_user_agent: str = ""
+    rutracker_proxy: str = ""
+
 
 class Settings(BaseModel):
     check_interval_minutes: int = 60
@@ -115,9 +124,11 @@ class Settings(BaseModel):
     http: HttpSettings = Field(default_factory=HttpSettings)
 
 
-# Хранилище пароля qBittorrent: на Windows это Credential Manager (ТЗ §29.2).
+# Секреты хранятся в системном хранилище: на Windows это Credential Manager
+# (ТЗ §29.2). Ключ записи — имя того, чей это доступ.
 KEYRING_SERVICE = "ATSM"
 KEYRING_USER = "qbittorrent"
+KEYRING_RUTRACKER = "rutracker"
 
 
 def _keyring():
@@ -133,34 +144,43 @@ def _keyring():
         return None
 
 
-def read_password() -> str:
+def read_secret(key: str = KEYRING_USER) -> str:
     store = _keyring()
     if store is None:
         return ""
     try:
-        return store.get_password(KEYRING_SERVICE, KEYRING_USER) or ""
+        return store.get_password(KEYRING_SERVICE, key) or ""
     except Exception as exc:  # noqa: BLE001
-        logger.debug("Пароль из хранилища не прочитан: {}", exc)
+        logger.debug("Секрет «{}» из хранилища не прочитан: {}", key, exc)
         return ""
 
 
-def write_password(password: str) -> bool:
-    """True, если пароль ушёл в системное хранилище, а не остался в файле."""
+def write_secret(value: str, key: str = KEYRING_USER) -> bool:
+    """True, если секрет ушёл в системное хранилище, а не остался в файле."""
     store = _keyring()
     if store is None:
         return False
     try:
-        if password:
-            store.set_password(KEYRING_SERVICE, KEYRING_USER, password)
+        if value:
+            store.set_password(KEYRING_SERVICE, key, value)
         else:
             try:
-                store.delete_password(KEYRING_SERVICE, KEYRING_USER)
+                store.delete_password(KEYRING_SERVICE, key)
             except Exception:  # noqa: BLE001 — записи не было, это не ошибка
                 pass
         return True
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Пароль не сохранён в хранилище Windows: {}", exc)
+        logger.warning("Секрет «{}» не сохранён в хранилище Windows: {}", key, exc)
         return False
+
+
+# Имена из времён, когда в хранилище лежал только пароль qBittorrent.
+def read_password() -> str:
+    return read_secret(KEYRING_USER)
+
+
+def write_password(password: str) -> bool:
+    return write_secret(password, KEYRING_USER)
 
 
 def load_settings(path: Path | None = None) -> Settings:
@@ -181,6 +201,9 @@ def load_settings(path: Path | None = None) -> Settings:
             logger.info("Пароль qBittorrent перенесён в хранилище Windows")
     else:
         settings.qbittorrent.password = read_password()
+
+    if not settings.sources.rutracker_cookies:
+        settings.sources.rutracker_cookies = read_secret(KEYRING_RUTRACKER)
     return settings
 
 
@@ -193,6 +216,8 @@ def save_settings(settings: Settings, path: Path | None = None) -> None:
     # иначе приложение просто перестанет помнить его между запусками.
     if write_password(settings.qbittorrent.password):
         data["qbittorrent"]["password"] = ""
+    if write_secret(settings.sources.rutracker_cookies, KEYRING_RUTRACKER):
+        data["sources"]["rutracker_cookies"] = ""
 
     tmp = target.with_suffix(target.suffix + ".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")

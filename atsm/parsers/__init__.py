@@ -5,6 +5,7 @@ from .base import (
     ParseError,
     ParserError,
     ReleaseInfo,
+    SearchHit,
     SourceUnreachable,
 )
 from .registry import ParserRegistry
@@ -17,5 +18,6 @@ __all__ = [
     "ParserError",
     "ParserRegistry",
     "ReleaseInfo",
+    "SearchHit",
     "SourceUnreachable",
 ]

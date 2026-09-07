@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from inspect import Parameter, signature
 
 from PySide6.QtCore import Qt, Signal
@@ -32,8 +33,25 @@ from ..config import Settings
 from ..logging_setup import log_buffer
 from ..services.autostart import is_autostart_enabled
 from .palette import THEME_LABELS
-from .models import HistoryTableModel
+from .models import HistoryTableModel, SearchTableModel
 from .workers import WorkerRunner
+
+
+# Строку cURL Chrome собирает по-разному в bash и cmd: где-то одинарные кавычки,
+# где-то двойные. Берём и то и другое, порядок заголовков не важен.
+_CURL_COOKIES = re.compile(r"-b\s+['\"](.+?)['\"]", re.DOTALL)
+_CURL_UA = re.compile(r"-H\s+['\"]user-agent:\s*(.+?)['\"]", re.IGNORECASE | re.DOTALL)
+_CURL_COOKIE_HEADER = re.compile(r"-H\s+['\"]cookie:\s*(.+?)['\"]", re.IGNORECASE | re.DOTALL)
+
+
+def _parse_curl(text: str) -> tuple[str, str]:
+    """Достаёт из вставленного cURL куки и User-Agent."""
+    cookies = _CURL_COOKIES.search(text) or _CURL_COOKIE_HEADER.search(text)
+    user_agent = _CURL_UA.search(text)
+    return (
+        cookies.group(1).strip() if cookies else "",
+        user_agent.group(1).strip() if user_agent else "",
+    )
 
 
 class AddSubscriptionDialog(QDialog):
@@ -293,7 +311,43 @@ class SettingsDialog(QDialog):
         hint.setObjectName("muted")
         hint.setWordWrap(True)
         form.addRow("", hint)
+
+        rutracker = QGroupBox("RuTracker")
+        rt_form = QFormLayout(rutracker)
+
+        rt_hint = QLabel(
+            "Сайт закрыт проверкой Cloudflare, поэтому приложение ходит вашей же "
+            "сессией. Откройте rutracker в браузере, DevTools → вкладка Network → "
+            "правый клик по запросу страницы → Copy → Copy as cURL, и вставьте сюда: "
+            "куки и User-Agent возьмутся из вставленного."
+        )
+        rt_hint.setObjectName("muted")
+        rt_hint.setWordWrap(True)
+        rt_form.addRow(rt_hint)
+
+        self.rutracker_curl = QPlainTextEdit()
+        self.rutracker_curl.setPlaceholderText("curl --url 'https://rutracker.org/forum/index.php' …")
+        self.rutracker_curl.setMaximumHeight(90)
+        rt_form.addRow("Вставьте cURL:", self.rutracker_curl)
+
+        self.rutracker_state = QLabel(self._rutracker_state_text())
+        self.rutracker_state.setObjectName("muted")
+        self.rutracker_state.setWordWrap(True)
+        rt_form.addRow("", self.rutracker_state)
+
+        self.rutracker_proxy = QLineEdit(self.draft.sources.rutracker_proxy)
+        self.rutracker_proxy.setPlaceholderText("socks5://127.0.0.1:10808 — если нужен обход блокировки")
+        rt_form.addRow("Прокси:", self.rutracker_proxy)
+
+        form.addRow(rutracker)
         return page
+
+    def _rutracker_state_text(self) -> str:
+        cookies = self.draft.sources.rutracker_cookies
+        if not cookies:
+            return "Доступ не настроен — поиск по RuTracker недоступен."
+        names = [part.split("=")[0].strip() for part in cookies.split(";") if "=" in part]
+        return "Доступ настроен, куки: " + ", ".join(sorted(names))
 
     def _pick_folder(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Папка загрузки", self.save_path.text())
@@ -349,6 +403,16 @@ class SettingsDialog(QDialog):
         qbt.add_paused = self.add_paused.isChecked()
         qbt.sequential_download = self.sequential.isChecked()
         qbt.delete_replaced = self.delete_replaced.isChecked()
+
+        curl = self.rutracker_curl.toPlainText().strip()
+        if curl:
+            cookies, user_agent = _parse_curl(curl)
+            if cookies:
+                self.draft.sources.rutracker_cookies = cookies
+                self.draft.sources.rutracker_user_agent = user_agent
+                self.rutracker_curl.clear()
+                self.rutracker_state.setText(self._rutracker_state_text())
+        self.draft.sources.rutracker_proxy = self.rutracker_proxy.text().strip()
 
         self.draft.sources.astar_host = self.astar_host.text().strip()
         mirrors = [line.strip() for line in self.mirrors.toPlainText().splitlines() if line.strip()]
@@ -472,3 +536,126 @@ class TitlePickerDialog(QDialog):
         if 0 <= row < len(self.candidates):
             self.selected = self.candidates[row]
             self.accept()
+
+
+class SearchDialog(QDialog):
+    """Поиск по RuTracker: найти, скачать, посмотреть потоком (ТЗ §3, §20).
+
+    Подписки здесь ни при чём: с трекера берут разовые раздачи, поэтому диалог
+    отдаёт наружу выбранную строку и действие, а окно уже решает, что с ней
+    делать.
+    """
+
+    DOWNLOAD = "download"
+    STREAM = "stream"
+
+    HEADERS = ("Название", "Раздел", "Размер", "Сиды", "Добавлен")
+
+    def __init__(self, parser, parent=None) -> None:
+        super().__init__(parent)
+        self.parser = parser
+        self.workers = WorkerRunner()
+        self.hits: list = []
+        self.chosen = None
+        self.action = None
+
+        self.setWindowTitle(f"Поиск на {parser.display_name}")
+        self.setMinimumSize(900, 520)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+
+        row = QHBoxLayout()
+        self.query = QLineEdit()
+        self.query.setPlaceholderText("Название фильма или сериала")
+        self.query.returnPressed.connect(self.search)
+        row.addWidget(self.query, 1)
+        self.search_button = QPushButton("Искать")
+        self.search_button.setObjectName("primaryButton")
+        self.search_button.clicked.connect(self.search)
+        row.addWidget(self.search_button)
+        layout.addLayout(row)
+
+        self.status = QLabel(
+            "Введите название и нажмите «Искать»."
+            if parser.configured
+            else "Доступ к RuTracker не настроен: вставьте cURL из браузера "
+            "в Настройках → Источники."
+        )
+        self.status.setObjectName("muted")
+        self.status.setWordWrap(True)
+        layout.addWidget(self.status)
+
+        self.table = QTableView()
+        self.model = SearchTableModel()
+        self.table.setModel(self.model)
+        self.table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
+        self.table.doubleClicked.connect(lambda *_: self._finish(self.DOWNLOAD))
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for column in range(1, len(self.HEADERS)):
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
+        layout.addWidget(self.table, 1)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        self.stream_button = QPushButton("▶ Смотреть потоком")
+        self.stream_button.clicked.connect(lambda: self._finish(self.STREAM))
+        buttons.addWidget(self.stream_button)
+        self.download_button = QPushButton("Скачать")
+        self.download_button.setObjectName("primaryButton")
+        self.download_button.clicked.connect(lambda: self._finish(self.DOWNLOAD))
+        buttons.addWidget(self.download_button)
+        close = QPushButton("Закрыть")
+        close.clicked.connect(self.reject)
+        buttons.addWidget(close)
+        layout.addLayout(buttons)
+
+        self.query.setEnabled(parser.configured)
+        self.search_button.setEnabled(parser.configured)
+        self._enable_actions(False)
+
+    def _enable_actions(self, enabled: bool) -> None:
+        self.download_button.setEnabled(enabled)
+        self.stream_button.setEnabled(enabled)
+
+    def search(self) -> None:
+        query = self.query.text().strip()
+        if not query:
+            return
+        self.search_button.setEnabled(False)
+        self._enable_actions(False)
+        self.status.setText("Ищем…")
+        self.workers.start(
+            self.parser.search,
+            query,
+            on_done=self._show_results,
+            on_failed=self._search_failed,
+        )
+
+    def _show_results(self, hits: list) -> None:
+        self.hits = hits
+        self.model.set_hits(hits)
+        self.search_button.setEnabled(True)
+        if hits:
+            self.table.selectRow(0)
+            self._enable_actions(True)
+            self.status.setText(f"Найдено раздач: {len(hits)}")
+        else:
+            self.status.setText("Ничего не найдено")
+
+    def _search_failed(self, exc: Exception) -> None:
+        self.search_button.setEnabled(True)
+        self.status.setText(f"Ошибка: {exc}")
+
+    def _finish(self, action: str) -> None:
+        rows = self.table.selectionModel().selectedRows()
+        if not rows:
+            return
+        hit = self.model.hit_at(rows[0].row())
+        if hit is None:
+            return
+        self.chosen = hit
+        self.action = action
+        self.accept()

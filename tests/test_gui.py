@@ -828,3 +828,92 @@ class TestTrayAndIcons:
         tray.set_new_count(3)
         assert tray.download_action.isEnabled() is True
         assert "3" in tray.icon.toolTip()
+
+
+class TestRuTrackerSearch:
+    """Поиск по трекеру: вставка доступа, таблица результатов, действия."""
+
+    def test_curl_parsing_takes_cookies_and_user_agent(self) -> None:
+        """Пользователь вставляет cURL целиком — куки и UA достаём сами."""
+        from atsm.gui.dialogs import _parse_curl
+
+        curl = (
+            "curl --url 'https://rutracker.org/forum/index.php' \\n"
+            "  -H 'accept-language: ru-RU,ru;q=0.9' \\n"
+            "  -b 'bb_session=abc; cf_clearance=xyz' \\n"
+            "  -H 'user-agent: Mozilla/5.0 (Windows NT 10.0) Chrome/152.0.0.0'"
+        )
+        cookies, user_agent = _parse_curl(curl)
+
+        assert cookies == "bb_session=abc; cf_clearance=xyz"
+        assert "Chrome/152" in user_agent
+
+    def test_curl_parsing_accepts_cookie_header_form(self) -> None:
+        """Chrome в cmd-варианте кладёт куки в заголовок, а не в -b."""
+        from atsm.gui.dialogs import _parse_curl
+
+        cookies, _ = _parse_curl('curl "https://rutracker.org" -H "cookie: bb_session=abc"')
+        assert cookies == "bb_session=abc"
+
+    def test_search_dialog_disabled_without_access(self, qtbot) -> None:
+        from atsm.gui.dialogs import SearchDialog
+
+        class _Parser:
+            display_name = "RuTracker"
+            configured = False
+
+            def search(self, query):  # pragma: no cover — не должен вызываться
+                raise AssertionError("поиск без настроенного доступа")
+
+        dialog = SearchDialog(_Parser())
+        qtbot.addWidget(dialog)
+
+        assert dialog.search_button.isEnabled() is False
+        assert "не настроен" in dialog.status.text()
+
+    def test_search_shows_results_and_returns_choice(self, qtbot) -> None:
+        from atsm.parsers.base import SearchHit
+        from atsm.gui.dialogs import SearchDialog
+
+        hit = SearchHit(
+            topic_id="42",
+            title="Фильм",
+            url="https://rutracker.org/forum/viewtopic.php?t=42",
+            category="Зарубежное кино",
+            size_bytes=2 * 1024**3,
+            seeders=10,
+        )
+
+        class _Parser:
+            display_name = "RuTracker"
+            configured = True
+
+            def search(self, query):
+                return [hit]
+
+        dialog = SearchDialog(_Parser())
+        qtbot.addWidget(dialog)
+        dialog.query.setText("фильм")
+        dialog.search()
+        qtbot.waitUntil(lambda: dialog.model.rowCount() == 1, timeout=2000)
+
+        assert "Найдено раздач: 1" in dialog.status.text()
+        dialog._finish(SearchDialog.STREAM)
+        assert dialog.chosen is hit
+        assert dialog.action == SearchDialog.STREAM
+
+    def test_found_release_is_saved_once(self, qtbot, seeded_ctx) -> None:
+        """Повторный выбор той же темы не плодит дубликаты подписок."""
+        from atsm.core.subscription_service import SubscriptionService
+
+        service = SubscriptionService(seeded_ctx.repos, seeded_ctx_registry(seeded_ctx))
+        first = service.add_from_search(URL)
+        second = service.add_from_search(URL)
+
+        assert first.id == second.id
+        assert len(seeded_ctx.repos.anime.list()) == 1
+
+
+def seeded_ctx_registry(ctx):
+    """Реестр с тем же фейковым парсером, что и в остальных тестах."""
+    return FakeRegistry(FakeParser([release("3", 3)]))

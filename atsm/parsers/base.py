@@ -52,6 +52,24 @@ class ReleaseInfo:
 
 
 @dataclass(slots=True)
+class SearchHit:
+    """Строка результата поиска у источников, которые умеют искать (ТЗ §3).
+
+    Отдельно от ReleaseInfo: найденное ещё не подписка и не раздача в базе —
+    это просто то, что показывается в таблице до выбора пользователя.
+    """
+
+    topic_id: str
+    title: str
+    url: str
+    category: str | None = None
+    size_bytes: int | None = None
+    seeders: int | None = None
+    leechers: int | None = None
+    added: date | None = None
+
+
+@dataclass(slots=True)
 class AnimeInfo:
     title: str
     url: str

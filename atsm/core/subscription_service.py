@@ -61,6 +61,24 @@ class SubscriptionService:
         assert anime is not None
         return anime
 
+    def add_from_search(self, url: str):
+        """Кладёт найденную на трекере раздачу в базу и возвращает её.
+
+        Разовая раздача с трекера — та же подписка с одной раздачей: так
+        работают и отправка в клиент, и потоковый просмотр, и библиотека,
+        без единой правки в ядре. Повторный выбор той же темы не создаёт
+        дубликат, а возвращает уже сохранённую раздачу.
+        """
+        try:
+            anime = self.add(url)
+        except SubscriptionExists as exists:
+            anime = exists.anime
+
+        releases = self.repos.releases.list_for_anime(anime.id)
+        if not releases:
+            raise ParserError(f"У «{anime.title}» не оказалось раздач")
+        return releases[0]
+
     def remove(self, anime_id: int) -> None:
         anime = self.repos.anime.get(anime_id)
         self.repos.anime.delete(anime_id)

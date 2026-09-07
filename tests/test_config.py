@@ -114,3 +114,18 @@ def test_without_store_password_stays_in_file(tmp_path: Path, monkeypatch) -> No
     save_settings(settings, path)
 
     assert load_settings(path).qbittorrent.password == "тайна"
+
+
+def test_rutracker_cookies_not_stored_in_file(tmp_path: Path, monkeypatch) -> None:
+    """Куки RuTracker — тот же секрет, что и пароль: в файле их быть не должно."""
+    store = _FakeStore()
+    monkeypatch.setattr("atsm.config._keyring", lambda: store)
+
+    path = tmp_path / "settings.json"
+    settings = Settings()
+    settings.sources.rutracker_cookies = "bb_session=тайна; cf_clearance=тайна"
+    save_settings(settings, path)
+
+    assert "тайна" not in path.read_text(encoding="utf-8")
+    assert json.loads(path.read_text(encoding="utf-8"))["sources"]["rutracker_cookies"] == ""
+    assert load_settings(path).sources.rutracker_cookies.startswith("bb_session=")

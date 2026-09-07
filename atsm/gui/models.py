@@ -299,3 +299,60 @@ class HistoryTableModel(QAbstractTableModel):
         self.beginResetModel()
         self._items = items
         self.endResetModel()
+
+
+class SearchTableModel(QAbstractTableModel):
+    """Результаты поиска по трекеру (ТЗ §3, способ 2)."""
+
+    HEADERS = ("Название", "Раздел", "Размер", "Сиды", "Добавлен")
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._items: list = []
+
+    def set_hits(self, hits: list) -> None:
+        self.beginResetModel()
+        self._items = list(hits)
+        self.endResetModel()
+
+    def hit_at(self, row: int):
+        return self._items[row] if 0 <= row < len(self._items) else None
+
+    def rowCount(self, parent=QModelIndex()) -> int:  # noqa: N802
+        return 0 if parent.isValid() else len(self._items)
+
+    def columnCount(self, parent=QModelIndex()) -> int:  # noqa: N802
+        return 0 if parent.isValid() else len(self.HEADERS)
+
+    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):  # noqa: N802
+        if orientation != Qt.Orientation.Horizontal or role != Qt.ItemDataRole.DisplayRole:
+            return None
+        return self.HEADERS[section]
+
+    def data(self, index: QModelIndex, role=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid() or role != Qt.ItemDataRole.DisplayRole:
+            return None
+        hit = self._items[index.row()]
+        column = index.column()
+        if column == 0:
+            return hit.title
+        if column == 1:
+            return hit.category or "—"
+        if column == 2:
+            return _size_label(hit.size_bytes)
+        if column == 3:
+            return "—" if hit.seeders is None else str(hit.seeders)
+        if column == 4:
+            return hit.added.strftime("%d.%m.%Y") if hit.added else "—"
+        return None
+
+
+def _size_label(size_bytes: int | None) -> str:
+    if not size_bytes:
+        return "—"
+    size = float(size_bytes)
+    for unit in ("Б", "КБ", "МБ", "ГБ"):
+        if size < 1024 or unit == "ГБ":
+            return f"{size:.2f} {unit}".replace(".00", "")
+        size /= 1024
+    return "—"

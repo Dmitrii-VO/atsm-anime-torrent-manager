@@ -38,6 +38,7 @@ from ..torrent.qbittorrent import QBittorrentClient
 from .dialogs import (
     AddSubscriptionDialog,
     LogDialog,
+    SearchDialog,
     SettingsDialog,
     TitlePickerDialog,
     confirm,
@@ -108,6 +109,9 @@ class MainWindow(QMainWindow):
 
         self.check_all_button = QPushButton("Проверить все")
         row.addWidget(self.check_all_button)
+
+        self.search_button = QPushButton("Поиск на трекере")
+        row.addWidget(self.search_button)
         row.addStretch(1)
 
         self.log_button = QPushButton("Журнал")
@@ -156,6 +160,7 @@ class MainWindow(QMainWindow):
     def _connect(self) -> None:
         self.add_button.clicked.connect(self.add_subscription)
         self.check_all_button.clicked.connect(self.check_all)
+        self.search_button.clicked.connect(self.open_search)
         self.settings_button.clicked.connect(self.open_settings)
         self.log_button.clicked.connect(self.open_log)
 
@@ -244,6 +249,7 @@ class MainWindow(QMainWindow):
         self._busy = busy
         self.progress.setVisible(busy)
         self.check_all_button.setEnabled(not busy)
+        self.search_button.setEnabled(not busy)
         self.add_button.setEnabled(not busy)
         if message:
             self.status_label.setText(message)
@@ -435,6 +441,41 @@ class MainWindow(QMainWindow):
         self.status_label.setText(
             "Отправлено в торрент-клиент" if ok else "Торрент-клиент отклонил раздачу"
         )
+
+    def open_search(self) -> None:
+        """Поиск по трекеру: найденное скачивается или смотрится потоком."""
+        parser = self._search_parser()
+        if parser is None:
+            self.status_label.setText("Ни один источник не умеет искать по названию")
+            return
+
+        dialog = SearchDialog(parser, self)
+        if dialog.exec() != SearchDialog.DialogCode.Accepted or dialog.chosen is None:
+            return
+
+        hit, action = dialog.chosen, dialog.action
+        self.status_label.setText(f"Сохраняем «{hit.title[:60]}»…")
+        self._run(
+            self.subscriptions.add_from_search,
+            lambda release: self._on_search_saved(release, action),
+            hit.url,
+            busy_message="Читаем раздачу с трекера…",
+        )
+
+    def _search_parser(self):
+        """Источник, умеющий искать. Контракт BaseParser поиска не требует."""
+        for parser in self.registry.all():
+            if hasattr(parser, "search"):
+                return parser
+        return None
+
+    def _on_search_saved(self, release: Release, action: str) -> None:
+        self._set_busy(False)
+        self.refresh_all()
+        if action == SearchDialog.STREAM:
+            self.stream_release(release)
+        else:
+            self.send_release(release)
 
     def stream_release(self, release: Release) -> None:
         """Смотреть, не дожидаясь конца загрузки (ТЗ §7, приоритет 4 плана).
