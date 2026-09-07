@@ -11,6 +11,7 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
+from loguru import logger
 from pydantic import BaseModel, Field
 
 from . import APP_NAME
@@ -74,7 +75,7 @@ class QBittorrentSettings(BaseModel):
     port: int = 8080
     use_https: bool = False
     username: str = "admin"
-    # TODO(открытый вопрос ТЗ §29.2): перенести в Windows Credential Manager.
+    # В settings.json не пишется: живёт в Windows Credential Manager (ТЗ §29.2).
     password: str = ""
     category: str = "anime"
     save_path: str = ""
@@ -114,6 +115,54 @@ class Settings(BaseModel):
     http: HttpSettings = Field(default_factory=HttpSettings)
 
 
+# Хранилище пароля qBittorrent: на Windows это Credential Manager (ТЗ §29.2).
+KEYRING_SERVICE = "ATSM"
+KEYRING_USER = "qbittorrent"
+
+
+def _keyring():
+    """Возвращает модуль keyring или None, если хранилища в системе нет."""
+    try:
+        import keyring
+
+        from keyring.errors import NoKeyringError  # noqa: F401 — проверка целостности
+
+        return keyring
+    except Exception as exc:  # noqa: BLE001 — бэкенд ломается по-разному
+        logger.debug("Хранилище паролей недоступно: {}", exc)
+        return None
+
+
+def read_password() -> str:
+    store = _keyring()
+    if store is None:
+        return ""
+    try:
+        return store.get_password(KEYRING_SERVICE, KEYRING_USER) or ""
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Пароль из хранилища не прочитан: {}", exc)
+        return ""
+
+
+def write_password(password: str) -> bool:
+    """True, если пароль ушёл в системное хранилище, а не остался в файле."""
+    store = _keyring()
+    if store is None:
+        return False
+    try:
+        if password:
+            store.set_password(KEYRING_SERVICE, KEYRING_USER, password)
+        else:
+            try:
+                store.delete_password(KEYRING_SERVICE, KEYRING_USER)
+            except Exception:  # noqa: BLE001 — записи не было, это не ошибка
+                pass
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Пароль не сохранён в хранилище Windows: {}", exc)
+        return False
+
+
 def load_settings(path: Path | None = None) -> Settings:
     """Читает settings.json. Битый или отсутствующий файл — не повод падать."""
     target = path or paths().settings
@@ -121,18 +170,30 @@ def load_settings(path: Path | None = None) -> Settings:
         return Settings()
     try:
         raw = json.loads(target.read_text(encoding="utf-8"))
-        return Settings.model_validate(raw)
+        settings = Settings.model_validate(raw)
     except (json.JSONDecodeError, ValueError, OSError):
         return Settings()
+
+    if settings.qbittorrent.password:
+        # Пароль из старой версии: переносим в хранилище и вычищаем из файла.
+        if write_password(settings.qbittorrent.password):
+            save_settings(settings, target)
+            logger.info("Пароль qBittorrent перенесён в хранилище Windows")
+    else:
+        settings.qbittorrent.password = read_password()
+    return settings
 
 
 def save_settings(settings: Settings, path: Path | None = None) -> None:
     """Атомарная запись: сначала во временный файл, затем замена."""
     target = path or paths().settings
     target.parent.mkdir(parents=True, exist_ok=True)
+    data = settings.model_dump()
+    # Пароль пишем в файл, только если системное хранилище недоступно, —
+    # иначе приложение просто перестанет помнить его между запусками.
+    if write_password(settings.qbittorrent.password):
+        data["qbittorrent"]["password"] = ""
+
     tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(
-        json.dumps(settings.model_dump(), ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(target)

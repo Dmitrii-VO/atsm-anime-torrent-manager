@@ -24,6 +24,9 @@ hiddenimports = [
     "apscheduler.executors.pool",
     "apscheduler.triggers.interval",
     "apscheduler.jobstores.memory",
+    # Бэкенды keyring подбираются через точки входа — анализатор их не видит.
+    "keyring.backends.Windows",
+    "keyring.backends.fail",
 ]
 
 # Ненужные части Qt и научный стек тянут сотни мегабайт.

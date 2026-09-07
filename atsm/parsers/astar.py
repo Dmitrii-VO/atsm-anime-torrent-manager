@@ -31,6 +31,10 @@ from .base import (
 
 ENCODING = "windows-1251"
 
+# Заглушка «Проверка безопасности»: сайт отдаёт её вместо страницы под нагрузкой
+# и при подозрении на бота. HTTP 200, вёрстка тут ни при чём — раздач просто нет.
+CHALLENGE_MARKERS = ("Проверка безопасности", "включите JavaScript")
+
 SLUG_RE = re.compile(r"/(?P<slug>\d+-[^/]+?\.html)$", re.IGNORECASE)
 TORRENT_ID_RE = re.compile(r"torrent_(?P<id>\d+)_info")
 # Кроме обычных «Серия 235» встречаются сборники: «Серии 27-28», «Фильмы 1-4».
@@ -85,9 +89,19 @@ class AstarParser(BaseParser):
             self.limiter.wait(urlparse(url).hostname or "")
         return self.session.get(url, timeout=self.timeout, allow_redirects=True)
 
+    @staticmethod
+    def _is_challenge(response: requests.Response) -> bool:
+        # Заглушка отдаётся в UTF-8, боевые страницы — в windows-1251,
+        # поэтому декодируем отдельно от основного разбора.
+        if len(response.content) > 20_000:
+            return False
+        text = response.content.decode("utf-8", errors="ignore")
+        return any(marker in text for marker in CHALLENGE_MARKERS)
+
     def fetch(self, url: str) -> AnimeInfo:
         slug = self.extract_slug(url)
         errors: list[str] = []
+        blocked = False
 
         for host in self.hosts_to_try(url):
             candidate = self.build_url(host, slug)
@@ -103,6 +117,12 @@ class AstarParser(BaseParser):
                 logger.debug("Зеркало {} вернуло HTTP {}", host, response.status_code)
                 continue
 
+            if self._is_challenge(response):
+                errors.append(f"{host}: проверка браузера")
+                logger.debug("Зеркало {} отдало заглушку проверки браузера", host)
+                blocked = True
+                continue
+
             html = response.content.decode(ENCODING, errors="replace")
             info = self.parse(html, base_url=candidate)
 
@@ -112,6 +132,12 @@ class AstarParser(BaseParser):
                 self.sources.astar_host = host
             return info
 
+        if blocked:
+            # Не «изменилась вёрстка»: страница цела, её просто не показывают.
+            raise SourceUnreachable(
+                "astar включил проверку браузера (защита от ботов и нагрузки). "
+                "Раздачи временно недоступны — проверьте позже."
+            )
         raise SourceUnreachable("Ни одно зеркало astar не ответило: " + "; ".join(errors))
 
     def download_torrent(self, release: ReleaseInfo) -> bytes:

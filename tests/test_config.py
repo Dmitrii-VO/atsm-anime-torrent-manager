@@ -56,3 +56,61 @@ def test_qbittorrent_base_url() -> None:
     assert settings.qbittorrent.base_url == "http://127.0.0.1:8080"
     settings.qbittorrent.use_https = True
     assert settings.qbittorrent.base_url.startswith("https://")
+
+
+class _FakeStore:
+    """Подмена keyring: тесты не должны трогать реальное хранилище Windows."""
+
+    def __init__(self) -> None:
+        self.values: dict[tuple[str, str], str] = {}
+
+    def get_password(self, service: str, user: str) -> str | None:
+        return self.values.get((service, user))
+
+    def set_password(self, service: str, user: str, password: str) -> None:
+        self.values[(service, user)] = password
+
+    def delete_password(self, service: str, user: str) -> None:
+        del self.values[(service, user)]
+
+
+def test_password_not_stored_in_file(tmp_path: Path, monkeypatch) -> None:
+    """Пароль уходит в хранилище системы, в settings.json остаётся пустая строка."""
+    store = _FakeStore()
+    monkeypatch.setattr("atsm.config._keyring", lambda: store)
+
+    path = tmp_path / "settings.json"
+    settings = Settings()
+    settings.qbittorrent.password = "тайна"
+    save_settings(settings, path)
+
+    assert json.loads(path.read_text(encoding="utf-8"))["qbittorrent"]["password"] == ""
+    assert "тайна" not in path.read_text(encoding="utf-8")
+    assert load_settings(path).qbittorrent.password == "тайна"
+
+
+def test_plaintext_password_migrates_out_of_file(tmp_path: Path, monkeypatch) -> None:
+    """Файл от старой версии: пароль переезжает в хранилище при первом чтении."""
+    store = _FakeStore()
+    monkeypatch.setattr("atsm.config._keyring", lambda: store)
+
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps({"qbittorrent": {"password": "старый"}}), encoding="utf-8"
+    )
+
+    assert load_settings(path).qbittorrent.password == "старый"
+    assert "старый" not in path.read_text(encoding="utf-8")
+    assert store.values[("ATSM", "qbittorrent")] == "старый"
+
+
+def test_without_store_password_stays_in_file(tmp_path: Path, monkeypatch) -> None:
+    """Без хранилища пароль остаётся в файле — иначе он потеряется между запусками."""
+    monkeypatch.setattr("atsm.config._keyring", lambda: None)
+
+    path = tmp_path / "settings.json"
+    settings = Settings()
+    settings.qbittorrent.password = "тайна"
+    save_settings(settings, path)
+
+    assert load_settings(path).qbittorrent.password == "тайна"

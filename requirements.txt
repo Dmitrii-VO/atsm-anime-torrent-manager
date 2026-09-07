@@ -5,6 +5,7 @@ lxml>=5.0
 loguru>=0.7
 APScheduler>=3.10
 pydantic>=2.7
+keyring>=25.0
 
 # dev
 pytest>=8.0
