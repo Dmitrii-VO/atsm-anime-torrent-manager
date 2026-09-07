@@ -30,6 +30,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pydantic import BaseModel
+
 from ..config import Settings
 from ..logging_setup import log_buffer
 from ..services.autostart import is_autostart_enabled
@@ -61,6 +63,22 @@ def _parse_curl(text: str) -> tuple[str, str]:
     if not cookies and "curl" not in text.lower() and _BARE_COOKIES.fullmatch(text):
         cookies = text
     return cookies, user_agent.group(1).strip() if user_agent else ""
+
+
+def _copy_into(target, source) -> None:
+    """Переносит значения в существующий объект настроек, не подменяя его.
+
+    Подмена вложенных моделей рвёт связь с теми, кто держит на них ссылку:
+    парсеры получают `settings.sources` при создании, и после `setattr` они
+    остались бы со старым объектом — настройки «сохранились», но не доехали.
+    """
+    for name in type(target).model_fields:
+        value = getattr(source, name)
+        current = getattr(target, name)
+        if isinstance(current, BaseModel) and isinstance(value, BaseModel):
+            _copy_into(current, value)
+        else:
+            setattr(target, name, value)
 
 
 class AddSubscriptionDialog(QDialog):
@@ -477,9 +495,7 @@ class SettingsDialog(QDialog):
             return
 
         self._apply_to_settings()
-        accepted = self.draft.model_copy(deep=True)
-        for field in type(self.settings).model_fields:
-            setattr(self.settings, field, getattr(accepted, field))
+        _copy_into(self.settings, self.draft.model_copy(deep=True))
         self.accept()
 
     def done(self, result: int) -> None:

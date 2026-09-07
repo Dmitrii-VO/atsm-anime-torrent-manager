@@ -412,7 +412,13 @@ class TestSettingsDialog:
         assert tested[0].qbittorrent.host == "draft.local"
         assert settings.qbittorrent.host == "127.0.0.1"
 
-    def test_save_applies_deep_draft(self, qtbot) -> None:
+    def test_save_updates_settings_in_place(self, qtbot) -> None:
+        """Значения переносятся внутрь существующих объектов настроек.
+
+        Раньше тест требовал обратного — подмены вложенной модели. Из-за неё
+        парсеры, получившие `settings.sources` при создании, оставались со
+        старым объектом: настройки сохранялись, но до них не доезжали.
+        """
         from atsm.gui.dialogs import SettingsDialog
 
         settings = Settings()
@@ -424,7 +430,7 @@ class TestSettingsDialog:
 
         assert dialog.result() == dialog.DialogCode.Accepted
         assert settings.qbittorrent.host == "saved.local"
-        assert settings.qbittorrent is not original_qbt
+        assert settings.qbittorrent is original_qbt
 
 
 class TestSourceDiagnostics:
@@ -984,3 +990,39 @@ class TestRuTrackerAccessInput:
         # Поле очищается: секрет не остаётся на экране.
         assert dialog.rutracker_curl.toPlainText() == ""
         assert "Доступ настроен" in dialog.rutracker_state.text()
+
+
+class TestSettingsReachLiveObjects:
+    """Настройки должны доходить до уже созданных парсеров, а не только в файл."""
+
+    def test_saved_cookies_reach_registry_parser(self, qtbot, seeded_ctx) -> None:
+        """«Доступ настроен» в настройках и «не настроен» в поиске — один объект."""
+        from atsm.gui.dialogs import SettingsDialog
+        from atsm.gui.main_window import MainWindow
+
+        window = MainWindow(seeded_ctx)
+        qtbot.addWidget(window)
+        parser = window._search_parser()
+        assert parser is not None and parser.configured is False
+
+        dialog = SettingsDialog(seeded_ctx.settings, lambda *_: None)
+        qtbot.addWidget(dialog)
+        dialog.rutracker_curl.setPlainText("bb_session=abc; cf_clearance=xyz")
+        dialog._save()
+
+        assert seeded_ctx.settings.sources.rutracker_cookies.startswith("bb_session=")
+        assert parser.configured is True, "парсер держит ссылку на прежний объект настроек"
+        window.scheduler.shutdown()
+
+    def test_saving_keeps_nested_settings_objects(self, qtbot, seeded_ctx) -> None:
+        """Вложенные модели обновляются на месте: на них ссылаются парсеры и клиент."""
+        from atsm.gui.dialogs import SettingsDialog
+
+        sources_before = seeded_ctx.settings.sources
+        dialog = SettingsDialog(seeded_ctx.settings, lambda *_: None)
+        qtbot.addWidget(dialog)
+        dialog.astar_host.setText("v42.astar.bz")
+        dialog._save()
+
+        assert seeded_ctx.settings.sources is sources_before
+        assert sources_before.astar_host == "v42.astar.bz"
