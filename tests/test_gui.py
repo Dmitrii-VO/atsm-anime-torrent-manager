@@ -1026,3 +1026,45 @@ class TestSettingsReachLiveObjects:
 
         assert seeded_ctx.settings.sources is sources_before
         assert sources_before.astar_host == "v42.astar.bz"
+
+
+class TestErrorMessages:
+    """Совет «установите qBittorrent» уместен не для любой ошибки клиента."""
+
+    def test_client_unavailable_offers_setup(self, qtbot, seeded_ctx, monkeypatch) -> None:
+        from atsm.gui.main_window import MainWindow
+        from atsm.torrent.base import TorrentClientUnavailable
+
+        window = MainWindow(seeded_ctx)
+        qtbot.addWidget(window)
+        offered: list = []
+        monkeypatch.setattr(window, "_offer_client_setup", offered.append)
+        monkeypatch.setattr("atsm.gui.main_window.QMessageBox.warning", lambda *a: None)
+
+        window._on_failure(TorrentClientUnavailable("нет связи"))
+
+        assert offered == ["нет связи"]
+        window.scheduler.shutdown()
+
+    def test_other_client_errors_do_not_blame_the_client(
+        self, qtbot, seeded_ctx, monkeypatch
+    ) -> None:
+        """«В раздаче нет видеофайлов» — не повод советовать установку клиента."""
+        from atsm.gui.main_window import MainWindow
+        from atsm.torrent.base import TorrentClientError
+
+        window = MainWindow(seeded_ctx)
+        qtbot.addWidget(window)
+        offered: list = []
+        shown: list = []
+        monkeypatch.setattr(window, "_offer_client_setup", offered.append)
+        monkeypatch.setattr(
+            "atsm.gui.main_window.QMessageBox.warning",
+            lambda parent, title, text: shown.append(text),
+        )
+
+        window._on_failure(TorrentClientError("В раздаче нет видеофайлов"))
+
+        assert offered == []
+        assert shown == ["В раздаче нет видеофайлов"]
+        window.scheduler.shutdown()

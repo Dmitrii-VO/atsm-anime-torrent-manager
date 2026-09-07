@@ -129,6 +129,10 @@ class Settings(BaseModel):
 KEYRING_SERVICE = "ATSM"
 KEYRING_USER = "qbittorrent"
 KEYRING_RUTRACKER = "rutracker"
+# Credential Manager принимает не больше 1280 символов на запись (2560 байт
+# UTF-16) и на 1281-м отвечает «CredWrite: неправильные данные». Куки RuTracker
+# длиннее, поэтому секрет режется на части: «rutracker», «rutracker.2», …
+SECRET_CHUNK = 1000
 
 
 def _keyring():
@@ -144,12 +148,22 @@ def _keyring():
         return None
 
 
+def _part_key(key: str, index: int) -> str:
+    return key if index == 0 else f"{key}.{index + 1}"
+
+
 def read_secret(key: str = KEYRING_USER) -> str:
     store = _keyring()
     if store is None:
         return ""
     try:
-        return store.get_password(KEYRING_SERVICE, key) or ""
+        parts = []
+        while True:
+            part = store.get_password(KEYRING_SERVICE, _part_key(key, len(parts)))
+            if not part:
+                break
+            parts.append(part)
+        return "".join(parts)
     except Exception as exc:  # noqa: BLE001
         logger.debug("Секрет «{}» из хранилища не прочитан: {}", key, exc)
         return ""
@@ -160,14 +174,20 @@ def write_secret(value: str, key: str = KEYRING_USER) -> bool:
     store = _keyring()
     if store is None:
         return False
+
+    chunks = [value[i : i + SECRET_CHUNK] for i in range(0, len(value), SECRET_CHUNK)]
     try:
-        if value:
-            store.set_password(KEYRING_SERVICE, key, value)
-        else:
-            try:
-                store.delete_password(KEYRING_SERVICE, key)
-            except Exception:  # noqa: BLE001 — записи не было, это не ошибка
-                pass
+        for index, chunk in enumerate(chunks):
+            store.set_password(KEYRING_SERVICE, _part_key(key, index), chunk)
+        # Секрет мог стать короче — лишние части удаляем, иначе при чтении
+        # к новому значению приклеится хвост старого.
+        index = len(chunks)
+        while True:
+            part_key = _part_key(key, index)
+            if not store.get_password(KEYRING_SERVICE, part_key):
+                break
+            store.delete_password(KEYRING_SERVICE, part_key)
+            index += 1
         return True
     except Exception as exc:  # noqa: BLE001
         logger.warning("Секрет «{}» не сохранён в хранилище Windows: {}", key, exc)

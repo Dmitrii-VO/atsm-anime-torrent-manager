@@ -33,7 +33,7 @@ from ..core.update_service import CheckSummary, UpdateService
 from ..metadata import MetadataService
 from ..parsers import ParserRegistry
 from ..services.scheduler import CheckScheduler
-from ..torrent.base import TorrentClientError
+from ..torrent.base import TorrentClientError, TorrentClientUnavailable
 from ..torrent.qbittorrent import QBittorrentClient
 from .dialogs import (
     AddSubscriptionDialog,
@@ -265,10 +265,12 @@ class MainWindow(QMainWindow):
         self._set_busy(False, f"Ошибка: {message}")
         logger.error("Операция не удалась: {}", message)
 
-        # Ненастроенный торрент-клиент — самая частая причина, и одной строки
-        # в статусе мало: подсказываем, что делать, и ведём в настройки.
-        if isinstance(exc, TorrentClientError):
+        # Совет «установите qBittorrent» уместен, только если до клиента не
+        # достучались. На «в раздаче нет видеофайлов» он сбивал с толку.
+        if isinstance(exc, TorrentClientUnavailable):
             self._offer_client_setup(message)
+        elif isinstance(exc, TorrentClientError):
+            QMessageBox.warning(self, "Не удалось выполнить", message)
 
     def _offer_client_setup(self, message: str) -> None:
         box = QMessageBox(self)

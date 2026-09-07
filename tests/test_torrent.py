@@ -246,6 +246,7 @@ class FakeClient:
         self.states: dict[str, str] = {}
         self.deleted: list[tuple[list[str], bool]] = []
         self.sequential: list[str] = []
+        self.sequential_errors = 0
         self.started: list[str] = []
         self.save_path = "D:\video"
         self.files: list[list[dict]] = [[{"name": "s01e01.mkv", "progress": 1.0}]]
@@ -277,6 +278,9 @@ class FakeClient:
         return self.files.pop(0) if len(self.files) > 1 else self.files[0]
 
     def ensure_sequential(self, info_hash: str) -> None:
+        if self.sequential_errors:
+            self.sequential_errors -= 1
+            raise TorrentClientError("Раздачи нет в торрент-клиенте")
         self.sequential.append(info_hash)
 
     def start(self, info_hash: str) -> None:
@@ -406,6 +410,41 @@ class TestTorrentService:
         assert path.name == "s01e01.mkv"
         # Раздача отправлена, поставлена в последовательный режим и снята с паузы.
         assert client.added and client.sequential and client.started
+
+    def test_stream_waits_for_metadata(self, service, repos, client, monkeypatch) -> None:
+        """Сразу после отправки клиент ещё не знает состав раздачи.
+
+        Пустой список файлов означает «метаданные не пришли», а не «видео нет»:
+        на живой раздаче отказ прилетал через 12 мс после отправки.
+        """
+        opened: list = []
+        monkeypatch.setattr(
+            "atsm.core.torrent_service._open_with_default_player", opened.append
+        )
+        monkeypatch.setattr("atsm.core.torrent_service.time.sleep", lambda _: None)
+        client.files = [
+            [],  # торрент только что добавлен, состав ещё неизвестен
+            [],
+            [{"name": "movie.mkv", "progress": 0.05}],
+        ]
+
+        path = service.stream(repos.releases.feed()[0])
+
+        assert opened == [path] and path.name == "movie.mkv"
+
+    def test_stream_waits_until_client_knows_torrent(
+        self, service, repos, client, monkeypatch
+    ) -> None:
+        """Пока раздачи нет в клиенте, переключение режима ещё невозможно."""
+        monkeypatch.setattr(
+            "atsm.core.torrent_service._open_with_default_player", lambda _: None
+        )
+        monkeypatch.setattr("atsm.core.torrent_service.time.sleep", lambda _: None)
+        client.sequential_errors = 2
+
+        service.stream(repos.releases.feed()[0])
+
+        assert client.sequential and client.started
 
     def test_stream_without_video_files(self, service, repos, client, monkeypatch) -> None:
         monkeypatch.setattr("atsm.core.torrent_service.time.sleep", lambda _: None)

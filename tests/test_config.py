@@ -129,3 +129,36 @@ def test_rutracker_cookies_not_stored_in_file(tmp_path: Path, monkeypatch) -> No
     assert "тайна" not in path.read_text(encoding="utf-8")
     assert json.loads(path.read_text(encoding="utf-8"))["sources"]["rutracker_cookies"] == ""
     assert load_settings(path).sources.rutracker_cookies.startswith("bb_session=")
+
+
+def test_long_secret_is_split_across_records(tmp_path: Path, monkeypatch) -> None:
+    """Credential Manager не принимает больше 1280 символов за раз.
+
+    Куки RuTracker длиннее, и раньше запись молча проваливалась, а секрет
+    оставался в settings.json открытым текстом.
+    """
+    from atsm.config import read_secret, write_secret
+
+    store = _FakeStore()
+    monkeypatch.setattr("atsm.config._keyring", lambda: store)
+
+    длинные_куки = "cf_clearance=" + "x" * 2500
+    assert write_secret(длинные_куки, "rutracker") is True
+
+    assert len(store.values) > 1, "секрет должен лечь несколькими записями"
+    assert all(len(value) <= 1280 for value in store.values.values())
+    assert read_secret("rutracker") == длинные_куки
+
+
+def test_shorter_secret_removes_leftover_parts(monkeypatch) -> None:
+    """Иначе к новому короткому значению приклеится хвост прежнего."""
+    from atsm.config import read_secret, write_secret
+
+    store = _FakeStore()
+    monkeypatch.setattr("atsm.config._keyring", lambda: store)
+
+    write_secret("y" * 2500, "rutracker")
+    write_secret("короткое", "rutracker")
+
+    assert read_secret("rutracker") == "короткое"
+    assert len(store.values) == 1

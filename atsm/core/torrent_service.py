@@ -15,14 +15,21 @@ from loguru import logger
 from ..db.repositories import Repositories
 from ..parsers import ParserRegistry
 from ..parsers.base import ParserError
-from ..torrent.base import BaseTorrentClient, TorrentClientError
+from ..torrent.base import (
+    BaseTorrentClient,
+    TorrentClientError,
+    TorrentClientUnavailable,
+)
 from ..torrent.bencode import BencodeError, info_hash
 from .models import HistoryAction, Release, ReleaseState, supersedes
 
 _UNSAFE_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _MAGNET_HASH = re.compile(r"urn:btih:([0-9a-fA-F]{40})")
 
-VIDEO_SUFFIXES = (".mkv", ".mp4", ".avi", ".webm", ".m4v", ".ts")
+VIDEO_SUFFIXES = (
+    ".mkv", ".mp4", ".avi", ".webm", ".m4v", ".ts", ".m2ts",
+    ".mpg", ".mpeg", ".vob", ".mov", ".wmv", ".iso",
+)
 # Плеер откроет растущий файл, когда есть заголовок контейнера и запас кадров.
 # Первую и последнюю части клиент качает вне очереди (firstLastPiecePrio).
 STREAM_MIN_PROGRESS = 0.02
@@ -68,7 +75,7 @@ class TorrentService:
     def send(self, release: Release) -> bool:
         """Отправляет раздачу в торрент-клиент и фиксирует результат."""
         if self.client is None:
-            raise TorrentClientError("Торрент-клиент не настроен")
+            raise TorrentClientUnavailable("Торрент-клиент не настроен")
 
         try:
             if release.magnet:
@@ -133,23 +140,35 @@ class TorrentService:
         докачивается — плееры играют растущий файл.
         """
         if self.client is None:
-            raise TorrentClientError("Торрент-клиент не настроен")
+            raise TorrentClientUnavailable("Торрент-клиент не настроен")
         if not hasattr(self.client, "torrent_files"):
             raise TorrentClientError("Торрент-клиент не умеет отдавать состав раздачи")
 
         info_hash = self._ensure_in_client(release)
-        self.client.ensure_sequential(info_hash)
-        self.client.start(info_hash)
 
         # ponytail: опрос раз в несколько секунд. Событий о прогрессе Web API
         # не шлёт; если понадобится реакция быстрее — только веб-сокеты клиента.
         deadline = time.monotonic() + STREAM_TIMEOUT_SEC
+        prepared = False
         while True:
-            path, progress = self._playable_file(info_hash)
-            if path is not None:
-                logger.info("Потоковый просмотр: {} ({:.0%})", path.name, progress)
-                _open_with_default_player(path)
-                return path
+            if not prepared:
+                try:
+                    # Сразу после отправки клиент ещё не знает раздачу: он
+                    # разбирает торрент и запрашивает метаданные.
+                    self.client.ensure_sequential(info_hash)
+                    self.client.start(info_hash)
+                    prepared = True
+                except TorrentClientError as exc:
+                    logger.debug("Раздача ещё не готова в клиенте: {}", exc)
+
+            progress = 0.0
+            if prepared:
+                path, progress = self._playable_file(info_hash)
+                if path is not None:
+                    logger.info("Потоковый просмотр: {} ({:.0%})", path.name, progress)
+                    _open_with_default_player(path)
+                    return path
+
             if time.monotonic() >= deadline:
                 raise TorrentClientError(
                     "Не дождались начала файла. Раздача качается — "
@@ -170,15 +189,25 @@ class TorrentService:
         return fresh.info_hash
 
     def _playable_file(self, info_hash: str) -> tuple[Path | None, float]:
-        """Самый готовый видеофайл раздачи и его прогресс."""
+        """Самый готовый видеофайл раздачи и его прогресс.
+
+        Пустой список файлов — не отказ: клиент ещё не получил метаданные.
+        Отказ — только когда состав раздачи известен и видео в нём нет.
+        """
         files = self.client.torrent_files(info_hash)
+        if not files:
+            return None, 0.0
+
         videos = [
             item
             for item in files
             if str(item.get("name", "")).lower().endswith(VIDEO_SUFFIXES)
         ]
         if not videos:
-            raise TorrentClientError("В раздаче нет видеофайлов")
+            raise TorrentClientError(
+                "В раздаче нет видеофайлов — смотреть потоком нечего. "
+                "Скачайте её обычным способом."
+            )
 
         best = max(videos, key=lambda item: item.get("progress", 0.0))
         progress = float(best.get("progress", 0.0))

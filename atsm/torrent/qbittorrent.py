@@ -10,7 +10,12 @@ import requests
 from loguru import logger
 
 from ..config import QBittorrentSettings
-from .base import AddResult, BaseTorrentClient, TorrentClientError
+from .base import (
+    AddResult,
+    BaseTorrentClient,
+    TorrentClientError,
+    TorrentClientUnavailable,
+)
 
 # qBittorrent отвечает 409, если раздача с таким хешем уже добавлена.
 ALREADY_ADDED = 409
@@ -44,20 +49,20 @@ class QBittorrentClient(BaseTorrentClient):
         except requests.RequestException as exc:
             # Полный стек urllib3 идёт в лог, пользователю — что делать.
             logger.debug("Подключение к qBittorrent не удалось: {}", exc)
-            raise TorrentClientError(
+            raise TorrentClientUnavailable(
                 f"qBittorrent недоступен по адресу {self.settings.base_url}. "
                 "Проверьте, что клиент запущен и в его настройках включён веб-интерфейс."
             ) from exc
 
         if response.status_code == 403:
-            raise TorrentClientError(
+            raise TorrentClientUnavailable(
                 "Вход в qBittorrent заблокирован: слишком много неудачных попыток. "
                 "Подождите или перезапустите клиент."
             )
 
         body = response.text.strip()
         if response.status_code == 200 and body.casefold() == "fails.":
-            raise TorrentClientError("Неверный логин или пароль qBittorrent")
+            raise TorrentClientUnavailable("Неверный логин или пароль qBittorrent")
         if not (
             response.status_code == 204
             or response.status_code == 200
@@ -91,7 +96,7 @@ class QBittorrentClient(BaseTorrentClient):
                 response = self.session.request(method, url, **kwargs)
         except requests.RequestException as exc:
             logger.debug("Запрос к qBittorrent не прошёл: {}", exc)
-            raise TorrentClientError(
+            raise TorrentClientUnavailable(
                 f"Потеряна связь с qBittorrent ({self.settings.base_url})"
             ) from exc
 
