@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from inspect import Parameter, signature
+from urllib.parse import urlparse
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -42,16 +43,24 @@ from .workers import WorkerRunner
 _CURL_COOKIES = re.compile(r"-b\s+['\"](.+?)['\"]", re.DOTALL)
 _CURL_UA = re.compile(r"-H\s+['\"]user-agent:\s*(.+?)['\"]", re.IGNORECASE | re.DOTALL)
 _CURL_COOKIE_HEADER = re.compile(r"-H\s+['\"]cookie:\s*(.+?)['\"]", re.IGNORECASE | re.DOTALL)
+# «bb_session=…; cf_clearance=…» без обёртки cURL.
+_BARE_COOKIES = re.compile(r"\s*[\w.-]+=[^;=\s]+(?:\s*;\s*[\w.-]+=[^;=\s]+)*\s*;?\s*")
 
 
 def _parse_curl(text: str) -> tuple[str, str]:
-    """Достаёт из вставленного cURL куки и User-Agent."""
-    cookies = _CURL_COOKIES.search(text) or _CURL_COOKIE_HEADER.search(text)
+    """Достаёт из вставленного cURL куки и User-Agent.
+
+    Принимает и голую строку кук («bb_session=…; cf_clearance=…»): её отдаёт
+    DevTools → Application → Cookies, если пользователь пришёл оттуда.
+    """
+    text = text.strip()
+    match = _CURL_COOKIES.search(text) or _CURL_COOKIE_HEADER.search(text)
     user_agent = _CURL_UA.search(text)
-    return (
-        cookies.group(1).strip() if cookies else "",
-        user_agent.group(1).strip() if user_agent else "",
-    )
+    cookies = match.group(1).strip() if match else ""
+
+    if not cookies and "curl" not in text.lower() and _BARE_COOKIES.fullmatch(text):
+        cookies = text
+    return cookies, user_agent.group(1).strip() if user_agent else ""
 
 
 class AddSubscriptionDialog(QDialog):
@@ -325,8 +334,15 @@ class SettingsDialog(QDialog):
         rt_hint.setWordWrap(True)
         rt_form.addRow(rt_hint)
 
+        self.rutracker_host = QLineEdit(self.draft.sources.rutracker_host)
+        self.rutracker_host.setPlaceholderText("rutracker.org")
+        rt_form.addRow("Адрес сайта:", self.rutracker_host)
+
         self.rutracker_curl = QPlainTextEdit()
-        self.rutracker_curl.setPlaceholderText("curl --url 'https://rutracker.org/forum/index.php' …")
+        self.rutracker_curl.setPlaceholderText(
+            "curl --url 'https://rutracker.org/forum/index.php' -H 'accept: …' -b 'bb_session=…'"
+        )
+        self.rutracker_curl.textChanged.connect(self._check_curl)
         self.rutracker_curl.setMaximumHeight(90)
         rt_form.addRow("Вставьте cURL:", self.rutracker_curl)
 
@@ -341,6 +357,30 @@ class SettingsDialog(QDialog):
 
         form.addRow(rutracker)
         return page
+
+    def _check_curl(self) -> str:
+        """Проверяет вставленное сразу, не дожидаясь «Сохранить»."""
+        text = self.rutracker_curl.toPlainText().strip()
+        if not text:
+            self.rutracker_state.setText(self._rutracker_state_text())
+            return ""
+
+        cookies, _ = _parse_curl(text)
+        if cookies:
+            self.rutracker_state.setText("Куки распознаны, нажмите «Сохранить».")
+            return ""
+
+        problem = (
+            "Это похоже на адрес страницы, а нужен весь запрос."
+            if text.lower().startswith("http")
+            else "В этой строке нет кук."
+        )
+        problem += (
+            " В DevTools на вкладке Network нажмите правым кликом по строке запроса "
+            "страницы (index.php, тип document) → Copy → Copy as cURL."
+        )
+        self.rutracker_state.setText(problem)
+        return problem
 
     def _rutracker_state_text(self) -> str:
         cookies = self.draft.sources.rutracker_cookies
@@ -404,12 +444,21 @@ class SettingsDialog(QDialog):
         qbt.sequential_download = self.sequential.isChecked()
         qbt.delete_replaced = self.delete_replaced.isChecked()
 
+        host = self.rutracker_host.text().strip()
+        # Пользователь может вставить адрес целиком — нам нужен только домен.
+        self.draft.sources.rutracker_host = (
+            urlparse(host).hostname or host.split("/")[0] if host else ""
+        )
+
         curl = self.rutracker_curl.toPlainText().strip()
         if curl:
             cookies, user_agent = _parse_curl(curl)
             if cookies:
                 self.draft.sources.rutracker_cookies = cookies
-                self.draft.sources.rutracker_user_agent = user_agent
+                # UA обязателен: cf_clearance к нему привязан. Если во вставке
+                # его не было, прежний лучше пустого.
+                if user_agent:
+                    self.draft.sources.rutracker_user_agent = user_agent
                 self.rutracker_curl.clear()
                 self.rutracker_state.setText(self._rutracker_state_text())
         self.draft.sources.rutracker_proxy = self.rutracker_proxy.text().strip()
@@ -420,6 +469,13 @@ class SettingsDialog(QDialog):
             self.draft.sources.astar_mirrors = mirrors
 
     def _save(self) -> None:
+        # Молча проглоченная вставка выглядит как «настройки не сохраняются»,
+        # поэтому неразобранный текст останавливает закрытие диалога.
+        problem = self._check_curl()
+        if problem:
+            QMessageBox.warning(self, "RuTracker: не разобрать вставленное", problem)
+            return
+
         self._apply_to_settings()
         accepted = self.draft.model_copy(deep=True)
         for field in type(self.settings).model_fields:

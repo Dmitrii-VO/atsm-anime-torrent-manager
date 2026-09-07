@@ -917,3 +917,70 @@ class TestRuTrackerSearch:
 def seeded_ctx_registry(ctx):
     """Реестр с тем же фейковым парсером, что и в остальных тестах."""
     return FakeRegistry(FakeParser([release("3", 3)]))
+
+
+class TestRuTrackerAccessInput:
+    """Вставка доступа: молчаливое игнорирование выглядит как «не сохраняется»."""
+
+    def _dialog(self, qtbot, settings=None):
+        from atsm.config import Settings
+        from atsm.gui.dialogs import SettingsDialog
+
+        dialog = SettingsDialog(settings or Settings(), lambda *_: None)
+        qtbot.addWidget(dialog)
+        return dialog
+
+    def test_pasted_link_is_rejected_with_advice(self, qtbot) -> None:
+        """Пользователь вставил адрес страницы вместо cURL — надо сказать об этом."""
+        dialog = self._dialog(qtbot)
+        dialog.rutracker_curl.setPlainText("https://rutracker.org/forum/index.php")
+
+        problem = dialog._check_curl()
+
+        assert problem, "неразобранная вставка обязана возвращать причину"
+        assert "адрес страницы" in problem and "Copy as cURL" in problem
+        assert "адрес страницы" in dialog.rutracker_state.text()
+
+    def test_bare_cookie_string_accepted(self, qtbot) -> None:
+        """DevTools → Application → Cookies отдаёт куки без обёртки cURL."""
+        dialog = self._dialog(qtbot)
+        dialog.rutracker_curl.setPlainText("bb_session=abc; cf_clearance=xyz")
+
+        assert dialog._check_curl() == ""
+        dialog._apply_to_settings()
+        assert dialog.draft.sources.rutracker_cookies == "bb_session=abc; cf_clearance=xyz"
+
+    def test_user_agent_survives_paste_without_it(self, qtbot) -> None:
+        """cf_clearance привязан к UA: прежний лучше пустого."""
+        from atsm.config import Settings
+
+        settings = Settings()
+        settings.sources.rutracker_user_agent = "Mozilla/5.0 (старый)"
+        dialog = self._dialog(qtbot, settings)
+        dialog.rutracker_curl.setPlainText("bb_session=abc; cf_clearance=xyz")
+        dialog._apply_to_settings()
+
+        assert dialog.draft.sources.rutracker_user_agent == "Mozilla/5.0 (старый)"
+
+    def test_host_saved_and_normalised(self, qtbot) -> None:
+        """Адрес сайта сохраняется, из полной ссылки берётся домен."""
+        dialog = self._dialog(qtbot)
+        dialog.rutracker_host.setText("https://rutracker.net/forum/index.php")
+        dialog._apply_to_settings()
+
+        assert dialog.draft.sources.rutracker_host == "rutracker.net"
+
+    def test_full_curl_saves_cookies_and_user_agent(self, qtbot) -> None:
+        dialog = self._dialog(qtbot)
+        dialog.rutracker_curl.setPlainText(
+            "curl --url 'https://rutracker.org/forum/index.php' \\n"
+            "  -b 'bb_session=abc; cf_clearance=xyz' \\n"
+            "  -H 'user-agent: Mozilla/5.0 Chrome/152.0.0.0'"
+        )
+        dialog._apply_to_settings()
+
+        assert dialog.draft.sources.rutracker_cookies == "bb_session=abc; cf_clearance=xyz"
+        assert "Chrome/152" in dialog.draft.sources.rutracker_user_agent
+        # Поле очищается: секрет не остаётся на экране.
+        assert dialog.rutracker_curl.toPlainText() == ""
+        assert "Доступ настроен" in dialog.rutracker_state.text()
