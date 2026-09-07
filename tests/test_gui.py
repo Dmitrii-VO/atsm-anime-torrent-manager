@@ -236,6 +236,26 @@ class TestLibraryView:
         assert statuses[0] == "Новая"          # вышла после подписки
         assert statuses[1:] == ["В архиве", "В архиве"]
 
+    def test_stream_request_reaches_service(self, qtbot, seeded_ctx, monkeypatch) -> None:
+        """Сигнал «Смотреть потоком» доходит до сервиса, а не висит неподключённым."""
+        from pathlib import Path
+
+        from atsm.gui.main_window import MainWindow
+
+        window = MainWindow(seeded_ctx)
+        qtbot.addWidget(window)
+
+        called: list = []
+        monkeypatch.setattr(
+            window.torrents, "stream", lambda release: called.append(release) or Path("x.mkv")
+        )
+        target = seeded_ctx.repos.releases.feed()[0]
+        window.library.stream_requested.emit(target)
+        qtbot.waitUntil(lambda: bool(called), timeout=2000)
+
+        assert called[0].id == target.id
+        window.scheduler.shutdown()
+
     def test_merged_check_and_mark_seen_use_all_ids(self, qtbot) -> None:
         view = LibraryView()
         qtbot.addWidget(view)

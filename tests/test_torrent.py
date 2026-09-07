@@ -245,6 +245,10 @@ class FakeClient:
         self.error: Exception | None = None
         self.states: dict[str, str] = {}
         self.deleted: list[tuple[list[str], bool]] = []
+        self.sequential: list[str] = []
+        self.started: list[str] = []
+        self.save_path = "D:\video"
+        self.files: list[list[dict]] = [[{"name": "s01e01.mkv", "progress": 1.0}]]
         self.settings = QBittorrentSettings(delete_replaced=True)
 
     def add_torrent_file(self, data: bytes, filename: str) -> AddResult:
@@ -264,6 +268,19 @@ class FakeClient:
 
     def delete(self, hashes: list[str], delete_files: bool = False) -> None:
         self.deleted.append((hashes, delete_files))
+
+    def torrent_info(self, info_hash: str) -> dict:
+        return {"save_path": self.save_path, "seq_dl": False, "f_l_piece_prio": False}
+
+    def torrent_files(self, info_hash: str) -> list[dict]:
+        # Каждый опрос отдаёт следующий кадр прогресса — так проверяется ожидание.
+        return self.files.pop(0) if len(self.files) > 1 else self.files[0]
+
+    def ensure_sequential(self, info_hash: str) -> None:
+        self.sequential.append(info_hash)
+
+    def start(self, info_hash: str) -> None:
+        self.started.append(info_hash)
 
 
 class TestTorrentService:
@@ -367,6 +384,35 @@ class TestTorrentService:
         target = repos.releases.feed()[0]
         service.send(target)
         assert client.deleted == []
+
+    def test_stream_waits_for_data_then_opens_player(
+        self, service, repos, client, monkeypatch
+    ) -> None:
+        """Пока файла не хватает — ждём; как только хватает — открываем плеер."""
+        opened: list = []
+        monkeypatch.setattr(
+            "atsm.core.torrent_service._open_with_default_player", opened.append
+        )
+        monkeypatch.setattr("atsm.core.torrent_service.time.sleep", lambda _: None)
+        client.files = [
+            [{"name": "видео/s01e01.mkv", "progress": 0.001}],
+            [{"name": "видео/s01e01.mkv", "progress": 0.05}],
+        ]
+
+        target = repos.releases.feed()[0]
+        path = service.stream(target)
+
+        assert opened == [path]
+        assert path.name == "s01e01.mkv"
+        # Раздача отправлена, поставлена в последовательный режим и снята с паузы.
+        assert client.added and client.sequential and client.started
+
+    def test_stream_without_video_files(self, service, repos, client, monkeypatch) -> None:
+        monkeypatch.setattr("atsm.core.torrent_service.time.sleep", lambda _: None)
+        client.files = [[{"name": "readme.txt", "progress": 1.0}]]
+
+        with pytest.raises(TorrentClientError, match="нет видеофайлов"):
+            service.stream(repos.releases.feed()[0])
 
     def test_save_to_disk(self, service, repos, tmp_path) -> None:
         path = service.save_to(repos.releases.feed()[0], tmp_path / "out")

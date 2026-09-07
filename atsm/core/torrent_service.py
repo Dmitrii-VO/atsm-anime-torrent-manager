@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import webbrowser
 from pathlib import Path
 
@@ -20,6 +21,13 @@ from .models import HistoryAction, Release, ReleaseState, supersedes
 
 _UNSAFE_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _MAGNET_HASH = re.compile(r"urn:btih:([0-9a-fA-F]{40})")
+
+VIDEO_SUFFIXES = (".mkv", ".mp4", ".avi", ".webm", ".m4v", ".ts")
+# Плеер откроет растущий файл, когда есть заголовок контейнера и запас кадров.
+# Первую и последнюю части клиент качает вне очереди (firstLastPiecePrio).
+STREAM_MIN_PROGRESS = 0.02
+STREAM_TIMEOUT_SEC = 600
+STREAM_POLL_SEC = 3.0
 
 
 class TorrentService:
@@ -115,11 +123,70 @@ class TorrentService:
     def open_in_default_client(self, release: Release) -> Path:
         """Фоллбэк без Web API: отдать файл ассоциированной программе (ТЗ §10)."""
         path = self.save_to(release, self.cache_dir)
-        if sys.platform == "win32":
-            os.startfile(path)  # noqa: S606
-        else:
-            subprocess.Popen(["xdg-open", str(path)])  # noqa: S603,S607
+        _open_with_default_player(path)
         return path
+
+    def stream(self, release: Release, notify=None) -> Path:
+        """Ставит раздачу качаться по порядку и открывает файл, как только можно.
+
+        Возвращает путь к запущенному файлу. Раздача остаётся в клиенте и
+        докачивается — плееры играют растущий файл.
+        """
+        if self.client is None:
+            raise TorrentClientError("Торрент-клиент не настроен")
+        if not hasattr(self.client, "torrent_files"):
+            raise TorrentClientError("Торрент-клиент не умеет отдавать состав раздачи")
+
+        info_hash = self._ensure_in_client(release)
+        self.client.ensure_sequential(info_hash)
+        self.client.start(info_hash)
+
+        # ponytail: опрос раз в несколько секунд. Событий о прогрессе Web API
+        # не шлёт; если понадобится реакция быстрее — только веб-сокеты клиента.
+        deadline = time.monotonic() + STREAM_TIMEOUT_SEC
+        while True:
+            path, progress = self._playable_file(info_hash)
+            if path is not None:
+                logger.info("Потоковый просмотр: {} ({:.0%})", path.name, progress)
+                _open_with_default_player(path)
+                return path
+            if time.monotonic() >= deadline:
+                raise TorrentClientError(
+                    "Не дождались начала файла. Раздача качается — "
+                    "попробуйте открыть плеер позже."
+                )
+            if notify:
+                notify(progress)
+            time.sleep(STREAM_POLL_SEC)
+
+    def _ensure_in_client(self, release: Release) -> str:
+        """Хеш раздачи в клиенте: если её там нет — отправляет."""
+        fresh = self.repos.releases.get(release.id) or release
+        if not fresh.info_hash:
+            self.send(release)
+            fresh = self.repos.releases.get(release.id) or release
+        if not fresh.info_hash:
+            raise TorrentClientError("Не удалось определить раздачу в клиенте")
+        return fresh.info_hash
+
+    def _playable_file(self, info_hash: str) -> tuple[Path | None, float]:
+        """Самый готовый видеофайл раздачи и его прогресс."""
+        files = self.client.torrent_files(info_hash)
+        videos = [
+            item
+            for item in files
+            if str(item.get("name", "")).lower().endswith(VIDEO_SUFFIXES)
+        ]
+        if not videos:
+            raise TorrentClientError("В раздаче нет видеофайлов")
+
+        best = max(videos, key=lambda item: item.get("progress", 0.0))
+        progress = float(best.get("progress", 0.0))
+        if progress < STREAM_MIN_PROGRESS:
+            return None, progress
+
+        save_path = self.client.torrent_info(info_hash).get("save_path", "")
+        return Path(save_path) / str(best["name"]), progress
 
     def refresh_download_states(self) -> int:
         """Отмечает скачанные раздачи по данным клиента (ТЗ §13)."""
@@ -221,6 +288,14 @@ class TorrentService:
         if anime is None:
             raise ParserError("Подписка не найдена")
         return anime.source
+
+
+def _open_with_default_player(path: Path) -> None:
+    """Отдаёт файл программе, назначенной в системе."""
+    if sys.platform == "win32":
+        os.startfile(path)  # noqa: S606
+    else:
+        subprocess.Popen(["xdg-open", str(path)])  # noqa: S603,S607
 
 
 def _as_release_info(release: Release):

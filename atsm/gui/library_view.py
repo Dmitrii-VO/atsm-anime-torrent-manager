@@ -200,6 +200,7 @@ class LibraryView(QWidget):
     send_requested = Signal(object)           # Release
     save_requested = Signal(object)
     open_default_client_requested = Signal(object)
+    stream_requested = Signal(object)         # Release — смотреть, не дожидаясь конца
     copy_link_requested = Signal(object)
     copy_magnet_requested = Signal(object)
     mark_seen_requested = Signal(object)      # anime_id
@@ -684,6 +685,11 @@ class LibraryView(QWidget):
         save = QAction("Скачать torrent-файл…", menu)
         save.triggered.connect(lambda: self.save_requested.emit(release))
         menu.addAction(save)
+
+        stream = QAction("▶ Смотреть потоком", menu)
+        stream.setToolTip("Качать по порядку и открыть плеер, как только можно смотреть")
+        stream.triggered.connect(lambda: self.stream_requested.emit(release))
+        menu.addAction(stream)
 
         default_client = QAction("Открыть в клиенте по умолчанию", menu)
         default_client.triggered.connect(

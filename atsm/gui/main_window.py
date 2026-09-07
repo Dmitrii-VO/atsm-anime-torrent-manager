@@ -170,6 +170,7 @@ class MainWindow(QMainWindow):
         self.library.send_requested.connect(self.send_release)
         self.library.save_requested.connect(self.save_release)
         self.library.open_default_client_requested.connect(self.open_in_default_client)
+        self.library.stream_requested.connect(self.stream_release)
         self.library.copy_link_requested.connect(
             lambda r: self._copy(r.torrent_url, "Ссылка скопирована")
         )
@@ -433,6 +434,20 @@ class MainWindow(QMainWindow):
         self.refresh_all()
         self.status_label.setText(
             "Отправлено в торрент-клиент" if ok else "Торрент-клиент отклонил раздачу"
+        )
+
+    def stream_release(self, release: Release) -> None:
+        """Смотреть, не дожидаясь конца загрузки (ТЗ §7, приоритет 4 плана).
+
+        Ожидание идёт фоном: раздача может качаться минуты, а интерфейс должен
+        оставаться живым.
+        """
+        self.status_label.setText(f"{release.episode_label}: готовим потоковый просмотр…")
+        self.workers.start(
+            self.torrents.stream,
+            release,
+            on_done=lambda path: self.status_label.setText(f"Открыто в плеере: {path.name}"),
+            on_failed=self._on_failure,
         )
 
     def download_all(self) -> None:

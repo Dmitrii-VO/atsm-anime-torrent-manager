@@ -172,6 +172,48 @@ class QBittorrentClient(BaseTorrentClient):
         )
         logger.info("Удалено раздач из qBittorrent: {}", len(hashes))
 
+    def torrent_info(self, info_hash: str) -> dict:
+        """Полная карточка раздачи: прогресс, пути, флаги последовательной загрузки."""
+        response = self._request("GET", "/torrents/info", params={"hashes": info_hash.lower()})
+        try:
+            items = response.json()
+        except ValueError as exc:
+            raise TorrentClientError(f"Неожиданный ответ qBittorrent: {exc}") from exc
+        if not items:
+            raise TorrentClientError("Раздачи нет в торрент-клиенте")
+        return items[0]
+
+    def torrent_files(self, info_hash: str) -> list[dict]:
+        """Файлы раздачи с их прогрессом — из них выбирается, что можно смотреть."""
+        response = self._request("GET", "/torrents/files", params={"hash": info_hash.lower()})
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise TorrentClientError(f"Неожиданный ответ qBittorrent: {exc}") from exc
+
+    def start(self, info_hash: str) -> None:
+        """Снимает раздачу с паузы. В 5.x ручка переименована, пробуем обе."""
+        for path in ("/torrents/resume", "/torrents/start"):
+            try:
+                self._request("POST", path, data={"hashes": info_hash.lower()})
+                return
+            except TorrentClientError as exc:
+                logger.debug("{} не сработал: {}", path, exc)
+
+    def ensure_sequential(self, info_hash: str) -> None:
+        """Включает последовательную загрузку у уже добавленной раздачи.
+
+        В API есть только переключатели, поэтому сначала смотрим текущее
+        состояние: слепой вызов выключил бы уже включённый режим.
+        """
+        info = self.torrent_info(info_hash)
+        for flag, path in (
+            ("seq_dl", "/torrents/toggleSequentialDownload"),
+            ("f_l_piece_prio", "/torrents/toggleFirstLastPiecePrio"),
+        ):
+            if not info.get(flag):
+                self._request("POST", path, data={"hashes": info_hash.lower()})
+
     def torrent_states(self, hashes: list[str]) -> dict[str, str]:
         """Состояния раздач по info_hash — для статуса «скачана» (ТЗ §13)."""
         if not hashes:
