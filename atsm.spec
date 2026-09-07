@@ -20,6 +20,7 @@ datas = [
 hiddenimports = [
     "atsm.parsers.astar",
     "atsm.parsers.anilibria",
+    "atsm.parsers.rutracker",
     "apscheduler.schedulers.background",
     "apscheduler.executors.pool",
     "apscheduler.triggers.interval",
